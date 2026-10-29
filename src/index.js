@@ -256,7 +256,12 @@ async function getEntries(env) {
 }
 async function getThreshold(env) {
   const st = await getSettings(env);
-  return { minScore: st.minScore ?? 0, minTput: st.minTput ?? 0, requireQuality: st.requireQuality !== false };
+  return {
+    minScore: st.minScore ?? 0,
+    minTput: st.minTput ?? 0,
+    requireQuality: st.requireQuality !== false,
+    maxAgeHours: st.maxAgeHours ?? 24,
+  };
 }
 
 // ---------- 控制面：订阅 / 面板 / 优选引擎 ----------
@@ -336,10 +341,19 @@ async function resolveEntries(request, env, url) {
   return { entries: entries.slice(0, limit), total: merged.length, limit, wantRegion };
 }
 
-function nodeName(base, e, i) {
-  const r = e.colo ? `${e.colo}` : (e.kind === 'domain' ? 'DOM' : 'IP');
-  return `${base}-${r}-${String(i + 1).padStart(3, '0')}`;
+function regionLabel(q, e, colos) {
+  // 优先：质量引擎实测的真实出口国家 → 其次 colo 映射 → 最后类型标记
+  if (q && q.cc) return CC_NAME[q.cc] || q.cc;
+  if (q && q.country) return q.country;
+  const c = colos && colos[e.value];
+  if (c) return REGION_NAMES[c] || CC_NAME[c] || c;
+  return e.kind === 'domain' ? 'DOM' : 'IP';
 }
+const CC_NAME = {
+  HK: '香港', TW: '台湾', JP: '日本', KR: '韩国', SG: '新加坡', MY: '马来西亚', TH: '泰国', VN: '越南',
+  PH: '菲律宾', ID: '印尼', IN: '印度', US: '美国', CA: '加拿大', GB: '英国', DE: '德国', FR: '法国',
+  NL: '荷兰', RU: '俄罗斯', AU: '澳洲', BR: '巴西', TR: '土耳其', AE: '阿联酋', CN: '中国', MO: '澳门',
+};
 
 async function subscription(request, env, url) {
   const target = (url.searchParams.get('target') || 'base64').toLowerCase();
@@ -349,6 +363,8 @@ async function subscription(request, env, url) {
   const entries = await getEntries(env);
   const quality = await getQuality(env);
   const th = await getThreshold(env);
+  let colosMap = {};
+  try { if (env.KV) colosMap = JSON.parse((await env.KV.get('colos')) || '{}'); } catch {}
   const hostOverride = url.searchParams.get('host') || '';
 
   // 组装候选：entry × preferred，质量优先
@@ -364,12 +380,14 @@ async function subscription(request, env, url) {
         if (!q.ok) continue;
         if ((q.score ?? 0) < th.minScore) continue;
         if ((q.tput ?? 0) < th.minTput) continue;
+        const ageH = (Date.now() - (q.ts || 0)) / 3600000;
+        if (th.maxAgeHours > 0 && ageH > th.maxAgeHours) continue;   // 质量数据过期
       } else if (th.requireQuality) {
         continue;
       }
       nodes.push({
         value: c.value, uuid, host,
-        name: `${base}-${(e.name || 'core')}-${q ? q.tier + '-' : ''}${String(nodes.length + 1).padStart(3, '0')}`,
+        name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}`,
         score: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
       });
     }
@@ -568,16 +586,16 @@ async function adminPage(request, env, url) {
       quality = JSON.parse((await env.KV.get('quality')) || '{}');
     }
   } catch {}
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const qRows = Object.entries(quality)
     .sort((a, b) => (b[1].score ?? -1) - (a[1].score ?? -1))
     .slice(0, 20)
-    .map(([k, v]) => `<tr><td>${esc(k.split('|')[1] || '')}</td><td>${esc((k.split('|')[0] || '').replace(/\.pages\.dev$/, ''))}</td><td class="${v.ok ? 'ok' : 'bad'}">${v.ok ? '✓' : '✗'}</td><td>${v.tier || '-'}</td><td>${v.score ?? 0}</td><td>${v.lat ?? '-'}</td><td>${v.jitter ?? 0}</td><td>${v.tput ?? 0}</td></tr>`)
+    .map(([k, v]) => `<tr><td>${esc(k.split('|')[1] || '')}</td><td>${esc(v.cc ? (CC_NAME[v.cc] || v.cc) : (v.country || '-'))}</td><td>${esc((k.split('|')[0] || '').replace(/\.pages\.dev$/, ''))}</td><td class="${v.ok ? 'ok' : 'bad'}">${v.ok ? '✓' : '✗'}</td><td>${v.tier || '-'}</td><td>${v.score ?? 0}</td><td>${v.lat ?? '-'}</td><td>${v.jitter ?? 0}</td><td>${v.tput ?? 0}</td></tr>`)
     .join('');
   const qualityTable = qRows
-    ? `<table><tr><th>入口</th><th>数据面</th><th>状态</th><th>等级</th><th>评分</th><th>延迟ms</th><th>抖动</th><th>KB/s</th></tr>${qRows}</table>`
+    ? `<table><tr><th>入口</th><th>国家</th><th>数据面</th><th>状态</th><th>等级</th><th>评分</th><th>延迟ms</th><th>抖动</th><th>KB/s</th></tr>${qRows}</table>`
     : '<div style="color:#8b9bb4;font-size:12px">暂无质量数据，先跑 tools/quality.mjs 并写入 KV 的 quality 键</div>';
   const base = `https://${url.host}`;
-  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>cfmux 后台</title><style>
 body{margin:0;background:#0b1020;color:#e6edf7;font:14px/1.6 -apple-system,"PingFang SC",sans-serif}
@@ -605,6 +623,7 @@ button.alt{background:#1f2a44}a{color:#63e2b7}code{background:#0f1526;padding:1p
 <div class="card"><h2>质量门槛</h2>
 <div class="row"><label>最低评分</label><input name="minScore" value="${esc(st.minScore ?? 0)}" placeholder="0-100，建议 45"></div>
 <div class="row"><label>最低吞吐 KB/s</label><input name="minTput" value="${esc(st.minTput ?? 0)}" placeholder="0，建议 80"></div>
+<div class="row"><label>数据有效期(小时)</label><input name="maxAgeHours" value="${esc(st.maxAgeHours ?? 24)}" placeholder="24"></div>
 <div class="row"><label>必须有实测</label><input name="requireQuality" value="${st.requireQuality === false ? 'false' : 'true'}" placeholder="true/false"></div>
 </div>
 <div class="card"><h2>质量表（按评分排序，前 20）</h2>${qualityTable}</div>
@@ -664,6 +683,7 @@ async function adminSave(request, env, url) {
     }
     if (body.minScore !== undefined) st.minScore = Math.max(0, Math.min(+body.minScore || 0, 100));
     if (body.minTput !== undefined) st.minTput = Math.max(0, +body.minTput || 0);
+    if (body.maxAgeHours !== undefined) st.maxAgeHours = Math.max(0, +body.maxAgeHours || 0);
     if (body.requireQuality !== undefined) st.requireQuality = String(body.requireQuality).toLowerCase() !== 'false';
     if (body.colos !== undefined) {
       const obj = JSON.parse(body.colos || '{}');

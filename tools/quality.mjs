@@ -60,7 +60,7 @@ function vlessHdr(uuidHex, host, port) {
 // 一次完整会话：返回 {lat, ws, ok}
 function session(entry, ip, targetHost, targetPort, reqText, readN, deadlineMs) {
   return new Promise((resolve) => {
-    const res = { ok: false, lat: null, ws: null, bytes: 0, err: null };
+    const res = { ok: false, lat: null, ws: null, bytes: 0, err: null, parts: [] };
     const t0 = Date.now(); let done = false;
     const fin = (e) => { if (done) return; done = true; res.err = e || null; res.totalMs = Date.now() - t0; clearTimeout(tm); try { sock.destroy(); } catch {} resolve(res); };
     const tm = setTimeout(() => fin('timeout'), deadlineMs);
@@ -87,10 +87,11 @@ function session(entry, ip, targetHost, targetPort, reqText, readN, deadlineMs) 
             const c = await r.next(TMO);
             if (!c) break;
             if (first && c.length <= 2) { first = false; continue; }
-            first = false; acc += c.length;
+            first = false; acc += c.length; res.parts.push(c);
             if (got === 0) { res.lat = Date.now() - t0; got = 1; }
           }
           res.bytes = acc; res.ok = acc > 0;
+          try { res.text = Buffer.concat(res.parts).toString('latin1'); } catch {}
           fin(res.ok ? null : 'nodata');
         })();
         return;
@@ -99,6 +100,23 @@ function session(entry, ip, targetHost, targetPort, reqText, readN, deadlineMs) 
     });
     sock.on('error', (e) => fin(e.code || 'err'));
   });
+}
+
+// 经隧道访问 ip-api.com，取真实出口国家/城市
+async function geoOf(entry, ip) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+  const r = await session(entry, ip, 'ip-api.com', 80,
+    'GET /json/?fields=status,country,countryCode,city,query,as HTTP/1.0\r\nHost: ip-api.com\r\n\r\n', 1500, 9000);
+  if (process.env.GEO_DEBUG) console.error('  [geo] ok=%s bytes=%s err=%s head=%s', r.ok, r.bytes, r.err, (r.text||'').slice(0,80).replace(/\n/g,' '));
+  if (!r.ok || !r.text) return null;
+  const i = r.text.indexOf('{');
+  if (i < 0) return null;
+  try {
+    const j = JSON.parse(r.text.slice(i, r.text.lastIndexOf('}') + 1));
+    return { cc: j.countryCode || null, country: j.country || null, city: j.city || null, ip: j.query || null };
+  } catch { return null; }
+  }
+  return null;
 }
 
 function scoreOf(q) {
@@ -132,10 +150,14 @@ for (const e of ENTRIES) {
         q.dlMs = big.totalMs; q.dlBytes = big.bytes;
       }
     }
+    if (q.ok) {
+      const g = await geoOf(e, ip);
+      if (g) { q.cc = g.cc; q.country = g.country; q.city = g.city; q.exitIp = g.ip; }
+    }
     if (!q.ok) q.err = lastErr;
     q.score = scoreOf(q); q.tier = tierOf(q.score);
     out[`${e.host}|${ip}`] = q;
-    console.log(`${q.ok ? '✅' : '❌'} ${e.host} @ ${ip.padEnd(16)} lat=${String(q.lat).padStart(5)} jit=${String(q.jitter).padStart(4)} tput=${String(q.tput).padStart(5)}KB/s score=${String(q.score).padStart(6)} ${q.tier} ${q.err || ''}`);
+    console.log(`${q.ok ? '✅' : '❌'} ${e.host} @ ${ip.padEnd(16)} lat=${String(q.lat).padStart(5)} jit=${String(q.jitter).padStart(4)} tput=${String(q.tput).padStart(5)}KB/s score=${String(q.score).padStart(6)} ${q.tier} ${q.cc ? q.cc + '/' + (q.city || '') : ''} ${q.err || ''}`);
   }
 }
 writeFileSync(OUT, JSON.stringify(out, null, 1));

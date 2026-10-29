@@ -304,3 +304,53 @@ wrangler pages deploy core --project-name mux-core
 
 # 4) 验证：/ 应返回 hello；/<uuid>/api/config 应返回 JSON
 ```
+
+## 十二、v2.1：多数据面 · 真实国家 · 质量新鲜度
+
+### 1. 多数据面（3 入口分摊免费配额）
+| 数据面 | 用途 |
+| --- | --- |
+| `mux-core.pages.dev` | 主入口 |
+| `mux-core-2.pages.dev` | 分摊 100k 请求/天 |
+| `mux-core-3.pages.dev` | 分摊 + 故障隔离 |
+
+订阅自动跨入口合并、按质量分排序（实测 3×5=15 个组合全部可用）。
+
+### 2. 节点名显示**真实国家**（不是 colo 猜测）
+`tools/quality.mjs` 会**经隧道**访问 `ip-api.com`，读取该节点的**真实出口国家/城市**：
+
+```
+✅ mux-core.pages.dev @ 104.17.2.1  lat=803 jit=3176 tput=142KB/s score=68.16 A US/East Los Angeles
+✅ mux-core.pages.dev @ 188.114.97.1 lat=1267 jit=1187 tput=129KB/s score=62.02 A NL/Amsterdam
+```
+
+节点名优先级：**真实国家（geo）→ colo 中文名 → 类型标记**，输出如
+`美国-core-01-A`、`荷兰-阿姆斯特丹-core2-08-A`。
+
+### 3. 质量新鲜度（防止拿旧数据当高质）
+- `maxAgeHours`（默认 24）：超过该时长的质量数据视为过期，节点不进订阅
+- 后台可改；配合 `tools/refresh.sh` 定时刷新，保证订阅里的节点是**近期实测达标**的
+
+### 4. 本地定时刷新（推荐，用你自己的网络）
+```bash
+# 环境变量
+export KV_ID=<cfmux 的 KV 命名空间 id>
+export ENTRIES_FILE=/path/entries.json
+export PREF_FILE=/path/preferred.txt
+./tools/refresh.sh          # 测质量 → 写 KV → 订阅立即更新
+
+# macOS 定时（每 2 小时），可加到 crontab
+0 */2 * * * cd ~/cfmux && KV_ID=xxx ENTRIES_FILE=... PREF_FILE=... ./tools/refresh.sh >> ~/cfmux-refresh.log 2>&1
+```
+
+### 5. 后台修复与增强
+- 修复 `/admin` 1101（`esc` 提前引用导致的 TDZ 异常）
+- 新增：数据面条目编辑、质量门槛（`minScore`/`minTput`/`maxAgeHours`/`requireQuality`）、质量表（含国家列）
+
+### 实测（2026-10-29）
+```
+数据面 3 个 × 优选 5 个 = 15 组合，全部可用
+评分区间 46.5 – 70.97，全部 A/S 级
+真实国家：US/洛杉矶、NL/阿姆斯特丹（经隧道实测，非 colo 推断）
+订阅: 436 候选 → 15 通过 → 按分排序输出
+```
