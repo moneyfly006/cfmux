@@ -1,0 +1,22 @@
+name: refresh-preferred
+on:
+  schedule: [{ cron: '0 */6 * * *' }]
+  workflow_dispatch:
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Measure preferred IPs
+        env:
+          HOST: ${{ vars.CFMUX_HOST }}
+          UUID: ${{ secrets.CFMUX_UUID }}
+        run: |
+          node tools/measure.mjs --host "$HOST" --uuid "$UUID" \
+            --ips 104.16.1.1,104.16.2.1,104.16.3.1,104.17.1.1,104.17.2.1,188.114.96.1,188.114.97.1 \
+            --out preferred.json || true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with: { name: preferred, path: preferred.json }
