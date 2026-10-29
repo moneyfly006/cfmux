@@ -237,6 +237,28 @@ async function proxyWebSocket(request, env, uuidHex) {
   return new Response(null, { status: 101, webSocket: client, headers: respHeaders });
 }
 
+
+// ---------- 质量层：只放行实测达标的节点 ----------
+async function getQuality(env) {
+  try { if (env.KV && env.KV.get) return JSON.parse((await env.KV.get('quality')) || '{}'); } catch {}
+  return {};
+}
+async function getEntries(env) {
+  try {
+    if (env.KV && env.KV.get) {
+      const raw = await env.KV.get('entries');
+      if (raw) { const a = JSON.parse(raw); if (Array.isArray(a) && a.length) return a; }
+    }
+  } catch {}
+  const st = await getSettings(env);
+  if (st.entries && Array.isArray(st.entries) && st.entries.length) return st.entries;
+  return [{ name: 'default', host: '', uuid: '' }];   // host 为空时用当前域名
+}
+async function getThreshold(env) {
+  const st = await getSettings(env);
+  return { minScore: st.minScore ?? 0, minTput: st.minTput ?? 0, requireQuality: st.requireQuality !== false };
+}
+
 // ---------- 控制面：订阅 / 面板 / 优选引擎 ----------
 const DEFAULT_PREFERRED = ['104.16.1.1','104.16.2.1','104.16.3.1','104.17.1.1','104.17.2.1','188.114.96.1','188.114.97.1'];
 // 内置的优选域名源（可在 env.sources 追加，逗号分隔 URL）
@@ -320,26 +342,55 @@ function nodeName(base, e, i) {
 }
 
 async function subscription(request, env, url) {
-  const uuid = (env.uuid || '').trim();
-  if (!uuid) return json({ ok: false, msg: 'uuid not configured' }, 503);
   const target = (url.searchParams.get('target') || 'base64').toLowerCase();
-  const host = url.searchParams.get('host') || url.host;
   const wsPath = url.searchParams.get('path') || '/';
   const base = url.searchParams.get('name') || 'cfmux';
+  const { entries: cand, total } = await resolveEntries(request, env, url);
+  const entries = await getEntries(env);
+  const quality = await getQuality(env);
+  const th = await getThreshold(env);
+  const hostOverride = url.searchParams.get('host') || '';
 
-  const { entries, total } = await resolveEntries(request, env, url);
-  const nodes = entries.map((e, i) => ({ value: e.value, name: nodeName(base, e, i) }));
-  if (!nodes.length) return jsonText('no entries (check region/like filter)', 404);
+  // 组装候选：entry × preferred，质量优先
+  const nodes = [];
+  for (const e of entries) {
+    const host = e.host || url.host;
+    const uuid = e.uuid || env.uuid;
+    if (!uuid) continue;
+    for (const c of cand) {
+      const q = quality[`${host}|${c.value}`];
+      // 有质量数据 → 必须达标；无质量数据 → 在 requireQuality=false 时才放行
+      if (q) {
+        if (!q.ok) continue;
+        if ((q.score ?? 0) < th.minScore) continue;
+        if ((q.tput ?? 0) < th.minTput) continue;
+      } else if (th.requireQuality) {
+        continue;
+      }
+      nodes.push({
+        value: c.value, uuid, host,
+        name: `${base}-${(e.name || 'core')}-${q ? q.tier + '-' : ''}${String(nodes.length + 1).padStart(3, '0')}`,
+        score: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
+      });
+    }
+  }
+  // 质量排序（有分的在前，同分按吞吐）
+  nodes.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.tput ?? 0) - (a.tput ?? 0));
+  const limited = nodes.slice(0, Math.min(+(url.searchParams.get('limit') || (await getSettings(env)).limit || 12), 300));
+  if (!limited.length) return json({ ok: false, msg: '没有达标节点（检查质量阈值 / 阈值过严）', total, threshold: th }, 404);
 
   const hdr = {
     'content-type': 'text/plain; charset=utf-8',
     'cache-control': 'no-store',
     'x-cfmux-total': String(total),
-    'x-cfmux-nodes': String(nodes.length),
+    'x-cfmux-nodes': String(limited.length),
+    'x-cfmux-pass': String(nodes.length),
+    'x-cfmux-minscore': String(th.minScore),
   };
-  if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(nodes, uuid, host, wsPath), { headers: hdr });
-  if (target === 'clash' || target === 'stash' || target === 'mihomo') return new Response(clashConfig(nodes, uuid, host, wsPath), { headers: hdr });
-  return new Response(b64(v2rayLinks(nodes, uuid, host, wsPath)), { headers: hdr });
+  const sn = limited.map((n) => ({ value: n.value, name: n.name, host: n.host, uuid: n.uuid }));
+  if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(sn, url, wsPath), { headers: hdr });
+  if (target === 'clash' || target === 'stash' || target === 'mihomo') return new Response(clashConfig(sn, url, wsPath), { headers: hdr });
+  return new Response(b64(v2rayLinks(sn, url, wsPath)), { headers: hdr });
 }
 
 async function apiEntries(request, env, url) {
@@ -354,17 +405,19 @@ function jsonText(body, status = 200) {
 }
 function b64(s) { return btoa(unescape(encodeURIComponent(s))); }
 
-function vlessLink(n, uuid, host, wsPath) {
+function vlessLink(n, url, wsPath) {
+  const uuid = n.uuid, host = n.host;
   const q = new URLSearchParams({
     encryption: 'none', security: 'tls', sni: host, fp: 'chrome',
     type: 'ws', host, path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048',
   });
   return `vless://${uuid}@${n.value}:443?${q.toString()}#${encodeURIComponent(n.name)}`;
 }
-function v2rayLinks(nodes, uuid, host, wsPath) { return nodes.map((n) => vlessLink(n, uuid, host, wsPath)).join('\n'); }
+function v2rayLinks(nodes, url, wsPath) { return nodes.map((n) => vlessLink(n, url, wsPath)).join('\n'); }
 
-function clashConfig(nodes, uuid, host, wsPath) {
-  const proxies = nodes.map((n) => `  - {name: "${n.name}", type: vless, server: ${n.value}, port: 443, uuid: ${uuid}, tls: true, servername: ${host}, network: ws, ws-opts: {path: "${wsPath}?ed=2048", headers: {Host: ${host}}}, udp: false}`);
+function clashConfig(nodes, url, wsPath) {
+  const host = nodes[0]?.host;
+  const proxies = nodes.map((n) => `  - {name: "${n.name}", type: vless, server: ${n.value}, port: 443, uuid: ${n.uuid}, tls: true, servername: ${n.host}, network: ws, ws-opts: {path: "${wsPath}?ed=2048", headers: {Host: ${host}}}, udp: false}`);
   const names = nodes.map((n) => `"${n.name}"`).join(', ');
   return ['mixed-port: 7890','allow-lan: false','mode: rule','log-level: warn','proxies:', ...proxies,
     'proxy-groups:',
@@ -373,10 +426,11 @@ function clashConfig(nodes, uuid, host, wsPath) {
     'rules:', '  - MATCH,故障切换'].join('\n');
 }
 
-function singboxConfig(nodes, uuid, host, wsPath) {
+function singboxConfig(nodes, url, wsPath) {
+  const host = nodes[0]?.host;
   const outs = nodes.map((n) => ({ type: 'vless', tag: n.name, server: n.value, server_port: 443, uuid,
-    tls: { enabled: true, server_name: host, utls: { enabled: true, fingerprint: 'chrome' } },
-    transport: { type: 'ws', path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048', headers: { Host: host } } }));
+    tls: { enabled: true, server_name: n.host, utls: { enabled: true, fingerprint: 'chrome' } },
+    transport: { type: 'ws', path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048', headers: { Host: n.host } } }));
   return JSON.stringify({
     log: { level: 'warn' },
     inbounds: [{ type: 'mixed', listen: '0.0.0.0', listen_port: 7890 }],
@@ -505,8 +559,23 @@ async function adminPage(request, env, url) {
   if (!(await isAdmin(request, env))) return new Response(loginHtml(false), { headers: { 'content-type': 'text/html; charset=utf-8' } });
 
   const st = await getSettings(env);
-  let preferred = '[]', colos = '{}';
-  try { if (env.KV) { preferred = (await env.KV.get('preferred')) || '[]'; colos = (await env.KV.get('colos')) || '{}'; } } catch {}
+  let preferred = '[]', colos = '{}', entriesRaw = '[]', quality = {};
+  try {
+    if (env.KV) {
+      preferred = (await env.KV.get('preferred')) || '[]';
+      colos = (await env.KV.get('colos')) || '{}';
+      entriesRaw = (await env.KV.get('entries')) || '[]';
+      quality = JSON.parse((await env.KV.get('quality')) || '{}');
+    }
+  } catch {}
+  const qRows = Object.entries(quality)
+    .sort((a, b) => (b[1].score ?? -1) - (a[1].score ?? -1))
+    .slice(0, 20)
+    .map(([k, v]) => `<tr><td>${esc(k.split('|')[1] || '')}</td><td>${esc((k.split('|')[0] || '').replace(/\.pages\.dev$/, ''))}</td><td class="${v.ok ? 'ok' : 'bad'}">${v.ok ? '✓' : '✗'}</td><td>${v.tier || '-'}</td><td>${v.score ?? 0}</td><td>${v.lat ?? '-'}</td><td>${v.jitter ?? 0}</td><td>${v.tput ?? 0}</td></tr>`)
+    .join('');
+  const qualityTable = qRows
+    ? `<table><tr><th>入口</th><th>数据面</th><th>状态</th><th>等级</th><th>评分</th><th>延迟ms</th><th>抖动</th><th>KB/s</th></tr>${qRows}</table>`
+    : '<div style="color:#8b9bb4;font-size:12px">暂无质量数据，先跑 tools/quality.mjs 并写入 KV 的 quality 键</div>';
   const base = `https://${url.host}`;
   const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -520,7 +589,7 @@ textarea{min-height:110px;resize:vertical}
 button{background:#1d4ed8;border:0;color:#fff;border-radius:8px;padding:9px 16px;cursor:pointer;font-size:13px}
 button.alt{background:#1f2a44}a{color:#63e2b7}code{background:#0f1526;padding:1px 5px;border-radius:4px;font-size:12px}
 .row{display:flex;gap:10px;align-items:center;margin-bottom:8px}.row label{width:110px;color:#8b9bb4;font-size:12px}
-#msg{margin-top:10px;font-size:13px}
+#msg{margin-top:10px;font-size:13px}table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:5px 7px;border-bottom:1px solid #1b253c;text-align:left}th{color:#8b9bb4;font-weight:500}.ok{color:#4ade80}.bad{color:#f87171}
 </style></head><body><div class="wrap">
 <h1>cfmux 后台 <span style="font-size:12px;color:#8b9bb4">已登录</span></h1>
 <div class="card"><h2>订阅</h2>
@@ -532,7 +601,14 @@ button.alt{background:#1f2a44}a{color:#63e2b7}code{background:#0f1526;padding:1p
 <div class="row"><label>优选源(sources)</label><input name="sources" value="${esc(st.sources)}" placeholder="逗号分隔，留空则用内置 BestCF"></div>
 <div class="row"><label>默认节点数</label><input name="limit" value="${esc(st.limit)}" placeholder="12"></div>
 </div>
-<div class="card"><h2>优选表 preferred（JSON 数组，按序输出）</h2><textarea name="preferred">${esc(preferred)}</textarea></div>
+<div class="card"><h2>数据面条目 entries（JSON：name/host/uuid/path）</h2><textarea name="entries">${esc(entriesRaw)}</textarea></div>
+<div class="card"><h2>质量门槛</h2>
+<div class="row"><label>最低评分</label><input name="minScore" value="${esc(st.minScore ?? 0)}" placeholder="0-100，建议 45"></div>
+<div class="row"><label>最低吞吐 KB/s</label><input name="minTput" value="${esc(st.minTput ?? 0)}" placeholder="0，建议 80"></div>
+<div class="row"><label>必须有实测</label><input name="requireQuality" value="${st.requireQuality === false ? 'false' : 'true'}" placeholder="true/false"></div>
+</div>
+<div class="card"><h2>质量表（按评分排序，前 20）</h2>${qualityTable}</div>
+<div class="card"><h2>优选表 preferred（JSON 数组）</h2><textarea name="preferred">${esc(preferred)}</textarea></div>
 <div class="card"><h2>区域映射 colos（JSON 对象 ip→colo）</h2><textarea name="colos">${esc(colos)}</textarea></div>
 <div><button type="submit">保存到 KV</button> <span id="msg"></span></div>
 </form>
@@ -576,17 +652,25 @@ async function adminSave(request, env, url) {
     const st = await getSettings(env);
     if (body.sources !== undefined) st.sources = String(body.sources || '').trim();
     if (body.limit !== undefined) st.limit = Math.max(1, Math.min(+body.limit || 12, 300));
-    await env.KV.put('settings', JSON.stringify(st));
     if (body.preferred !== undefined) {
       const arr = JSON.parse(body.preferred || '[]');
       if (!Array.isArray(arr)) throw new Error('preferred 必须是数组');
       await env.KV.put('preferred', JSON.stringify(arr));
     }
+    if (body.entries !== undefined) {
+      const arr = JSON.parse(body.entries || '[]');
+      if (!Array.isArray(arr)) throw new Error('entries 必须是数组');
+      await env.KV.put('entries', JSON.stringify(arr));
+    }
+    if (body.minScore !== undefined) st.minScore = Math.max(0, Math.min(+body.minScore || 0, 100));
+    if (body.minTput !== undefined) st.minTput = Math.max(0, +body.minTput || 0);
+    if (body.requireQuality !== undefined) st.requireQuality = String(body.requireQuality).toLowerCase() !== 'false';
     if (body.colos !== undefined) {
       const obj = JSON.parse(body.colos || '{}');
       if (typeof obj !== 'object' || Array.isArray(obj)) throw new Error('colos 必须是对象');
       await env.KV.put('colos', JSON.stringify(obj));
     }
+    await env.KV.put('settings', JSON.stringify(st));
     return json({ ok: true });
   } catch (e) {
     return json({ ok: false, msg: String(e).slice(0, 120) }, 400);

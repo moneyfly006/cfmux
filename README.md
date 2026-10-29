@@ -221,3 +221,86 @@ GET  /admin           带 cookie → 200 控制台
 POST /admin/save      → {"ok":true}，/sub 立即按新 limit 输出
 POST /admin/save      未登录 → 401 {"ok":false,"msg":"未登录"}
 ```
+
+## 十一、v2.0 架构调整：**数据面用完整内核，控制面做质量管控**
+
+> 前一版我自研的精简内核功能不全（缺 Trojan/XHTTP/家宽等），不符合「功能全保留」的要求。
+> v2.0 起改为两层：
+
+```
+┌─ 数据面 mux-core.pages.dev ──────────────┐   ← 完整内核（cfnew 2026.10.17.2）
+│  VLESS WS / Trojan WS / VLESS XHTTP      │      优选 / KV 配置 / ProxyIP / ECH…
+│  /api/config                             │
+└──────────────────────────────────────────┘
+                 ▲ Host/SNI 指向它
+┌─ 控制面 cfmux.pages.dev ─────────────────┐   ← 本项目（质量层）
+│  /admin    后台（密码登录）               │
+│  /sub      质量驱动订阅                   │
+│  /api/quality、/panel                    │
+└──────────────────────────────────────────┘
+     ▲ tools/quality.mjs 实测 → KV: quality
+```
+
+### 质量引擎：`tools/quality.mjs`
+
+对「数据面 × 优选入口」的每个组合做四件事：
+
+1. **握手**：TCP → TLS → WS 三段 RTT
+2. **可用性**：VLESS 请求 `generate_204`，连续 3 次
+3. **抖动**：3 次延迟的 `max - min`
+4. **吞吐**：经隧道下载 ~256 KB，算 **KB/s**
+
+评分公式（0–100）：
+
+```
+score = 延迟分×0.5 + 吞吐分×0.35 + 抖动分×0.15
+延迟分 = max(0, 100 - lat/60)        吞吐分 = min(100, KBps/2)      抖动分 = max(0, 100 - jitter/5)
+```
+
+分级：`S≥70 / A≥45 / B≥20 / C<20`
+
+### 订阅只放行达标节点
+
+`/sub` 会按 `quality` 表过滤：**`ok=false` 直接丢弃；`score < minScore` 或 `tput < minTput` 丢弃；
+其余按评分降序**。首次无质量数据时可用 `requireQuality=false` 放开（默认 true，宁缺毋滥）。
+
+响应头直接暴露筛选结果：
+
+```
+x-cfmux-total: 436      ← 候选总数
+x-cfmux-pass: 5         ← 通过质量门槛的
+x-cfmux-nodes: 5        ← 实际输出
+x-cfmux-minscore: 45    ← 当前门槛
+```
+
+### 实测（2026-10-29）
+
+| 候选 | 通过 | 评分区间 | 榜首节点实测 |
+| --- | --- | --- | --- |
+| 436 条（10 IP + 426 域名） | **5 条** | 49.1 – 61.5（全 A 级） | 204: 2.6–3.9s · 下载 **194 KB/s** · google 200 |
+
+### 后台新增（v2.0）
+
+| 区块 | 能做什么 |
+| --- | --- |
+| 数据面条目 `entries` | 增删数据面（name/host/uuid/path），支持多入口 |
+| 质量门槛 | `minScore`、`minTput`、`requireQuality` |
+| 质量表 | 前 20 名按评分排序，显示等级/延迟/抖动/吞吐 |
+| 优选源 / 优选表 / 区域映射 | 同 v1.2 |
+
+### 部署数据面（完整内核）
+
+```bash
+# 1) 取最新内核
+curl -sL https://github.com/byJoey/cfnew/releases/latest/download/_worker.js -o kernel.js
+
+# 2) 建 Pages 项目（uuid + KV 绑定 C）
+wrangler pages project create mux-core --production-branch main
+# 控制台设：u = <UUID>；KV 绑定 C = <命名空间>
+
+# 3) 部署
+mkdir -p core && cp kernel.js core/_worker.js
+wrangler pages deploy core --project-name mux-core
+
+# 4) 验证：/ 应返回 hello；/<uuid>/api/config 应返回 JSON
+```
