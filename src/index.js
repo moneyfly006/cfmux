@@ -1047,6 +1047,7 @@ function busy(btn, label, fn){
   if (btn) { btn.disabled = true; btn.textContent = label || '处理中…'; }
   return Promise.resolve().then(fn).finally(()=>{ if (btn) { btn.disabled=false; btn.textContent = old; } });
 }
+function copyById(el){ copy(el.dataset.copy); }
 function copy(id){
   const txt = $(id).textContent;
   const done = () => toast('已复制到剪贴板');
@@ -1164,7 +1165,7 @@ function renderSubs(){
   $('sub-list').innerHTML = SUB_FORMATS.map(([label, path], i) =>
     '<div class="card"><div class="k">'+label+'</div>'+
     '<code id="sl-'+i+'" style="display:block;margin-top:8px;word-break:break-all">'+base+path+'</code>'+
-    '<div style="margin-top:8px"><button class="btn alt" onclick="copy(\'sl-'+i+'\')">复制</button> '+
+    '<div style="margin-top:8px"><button class="btn alt" data-copy="sl-'+i+'" onclick="copyById(this)">复制</button> '+
     '<a class="btn alt" target="_blank" href="'+base+path+'" style="text-decoration:none">打开</a></div></div>'
   ).join('');
   $('qr').innerHTML = '<img alt="subscription qr" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(base+'/sub') + '">';
