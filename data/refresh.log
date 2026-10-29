@@ -1,0 +1,1 @@
+./tools/refresh.sh: line 8: KV_ID: 请设置 KV_ID（cfmux 项目的 KV 命名空间 id）

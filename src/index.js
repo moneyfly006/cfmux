@@ -110,6 +110,9 @@ export default {
     if (url.pathname === '/sub') return subscription(request, env, url);
     if (url.pathname === '/panel') return panelPage(request, env, url);
     if (url.pathname === '/api/entries') return apiEntries(request, env, url);
+    if (url.pathname === '/api/quality') return apiQuality(request, env, url);
+    if (url.pathname === '/api/state') return apiState(request, env, url);
+    if (url.pathname === '/api/action') return apiAction(request, env, url);
     if (url.pathname === '/admin') return adminPage(request, env, url);
     if (url.pathname === '/admin/login') return adminLogin(request, env, url);
     if (url.pathname === '/admin/logout') return adminLogout(request, env, url);
@@ -356,6 +359,19 @@ const CC_NAME = {
 };
 
 async function subscription(request, env, url) {
+  // 边缘缓存 60s：同一订阅 URL 命中缓存直接返回，省 KV 读与 CPU
+  const cache = caches.default;
+  const ckey = new Request(url.toString(), { method: 'GET' });
+  try {
+    const hit = await cache.match(ckey);
+    if (hit) return hit;
+  } catch {}
+  const resp = await buildSubscription(request, env, url);
+  try { if (resp.status === 200) await cache.put(ckey, resp.clone()); } catch {}
+  return resp;
+}
+
+async function buildSubscription(request, env, url) {
   const target = (url.searchParams.get('target') || 'base64').toLowerCase();
   const wsPath = url.searchParams.get('path') || '/';
   const base = url.searchParams.get('name') || 'cfmux';
@@ -378,6 +394,7 @@ async function subscription(request, env, url) {
       // 有质量数据 → 必须达标；无质量数据 → 在 requireQuality=false 时才放行
       if (q) {
         if (!q.ok) continue;
+        if (q.cooldownUntil && q.cooldownUntil > Date.now()) continue;   // 熔断中
         if ((q.score ?? 0) < th.minScore) continue;
         if ((q.tput ?? 0) < th.minTput) continue;
         const ageH = (Date.now() - (q.ts || 0)) / 3600000;
@@ -386,15 +403,29 @@ async function subscription(request, env, url) {
         continue;
       }
       nodes.push({
+        entry: e.name || 'core',
         value: c.value, uuid, host,
-        name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}`,
+        name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
         score: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
       });
     }
   }
+  // 每入口择优：先按 entry 分组各取 topK（避免某个入口霸榜），再全局排序
+  const perEntryK = Math.max(1, +(url.searchParams.get('perEntry') || (await getSettings(env)).perEntry || 2));
+  const byEntry = new Map();
+  for (const n of nodes) {
+    const k = n.entry || 'core';
+    if (!byEntry.has(k)) byEntry.set(k, []);
+    byEntry.get(k).push(n);
+  }
+  const picked = [];
+  for (const list of byEntry.values()) {
+    list.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.tput ?? 0) - (a.tput ?? 0));
+    picked.push(...list.slice(0, perEntryK));
+  }
   // 质量排序（有分的在前，同分按吞吐）
-  nodes.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.tput ?? 0) - (a.tput ?? 0));
-  const limited = nodes.slice(0, Math.min(+(url.searchParams.get('limit') || (await getSettings(env)).limit || 12), 300));
+  picked.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.tput ?? 0) - (a.tput ?? 0));
+  const limited = picked.slice(0, Math.min(+(url.searchParams.get('limit') || (await getSettings(env)).limit || 12), 300));
   if (!limited.length) return json({ ok: false, msg: '没有达标节点（检查质量阈值 / 阈值过严）', total, threshold: th }, 404);
 
   const hdr = {
@@ -409,6 +440,57 @@ async function subscription(request, env, url) {
   if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(sn, url, wsPath), { headers: hdr });
   if (target === 'clash' || target === 'stash' || target === 'mihomo') return new Response(clashConfig(sn, url, wsPath), { headers: hdr });
   return new Response(b64(v2rayLinks(sn, url, wsPath)), { headers: hdr });
+}
+
+async function apiState(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  const [quality, entries, colos] = await Promise.all([getQuality(env), getEntries(env), (async () => {
+    try { if (env.KV) return JSON.parse((await env.KV.get('colos')) || '{}'); } catch {} return {};
+  })()]);
+  const settings = await getSettings(env);
+  let preferred = '[]', history = [];
+  try {
+    if (env.KV) {
+      preferred = (await env.KV.get('preferred')) || '[]';
+      history = JSON.parse((await env.KV.get('history')) || '[]');
+    }
+  } catch {}
+  return json({
+    base: `https://${url.host}`, settings, entries, quality, colos, preferred, history,
+    ccNames: CC_NAME, regionNames: REGION_NAMES,
+  });
+}
+
+async function apiAction(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  if (!env.KV) return json({ ok: false, msg: 'KV 未绑定' }, 503);
+  const body = await request.json().catch(() => ({}));
+  const type = String(body.type || '');
+  const key = String(body.key || '');
+  let q = {};
+  try { q = JSON.parse((await env.KV.get('quality')) || '{}'); } catch {}
+  if (type === 'ban') {
+    if (!q[key]) return json({ ok: false, msg: '节点不存在' }, 404);
+    q[key].ok = false; q[key].cooldownUntil = Date.now() + 24 * 3600 * 1000;
+    q[key].cooldownReason = '手动熔断';
+  } else if (type === 'unban') {
+    if (!q[key]) return json({ ok: false, msg: '节点不存在' }, 404);
+    delete q[key].cooldownUntil; delete q[key].cooldownReason; q[key].fails = 0;
+  } else {
+    return json({ ok: false, msg: 'unknown action' }, 400);
+  }
+  await env.KV.put('quality', JSON.stringify(q));
+  return json({ ok: true });
+}
+
+async function apiQuality(request, env, url) {
+  const q = await getQuality(env);
+  const th = await getThreshold(env);
+  const list = Object.entries(q).map(([k, v]) => {
+    const [host, ip] = k.split('|');
+    return { host, ip, ...v, stale: th.maxAgeHours > 0 && (Date.now() - (v.ts || 0)) / 3600000 > th.maxAgeHours };
+  }).sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+  return json({ threshold: th, total: list.length, top: list.slice(0, +(url.searchParams.get('n') || 50)) });
 }
 
 async function apiEntries(request, env, url) {
@@ -575,74 +657,234 @@ code{background:#0f1526;padding:1px 4px;border-radius:4px}</style></head><body><
 async function adminPage(request, env, url) {
   if (!env.admin_password) return new Response(loginHtml(true), { headers: { 'content-type': 'text/html; charset=utf-8' } });
   if (!(await isAdmin(request, env))) return new Response(loginHtml(false), { headers: { 'content-type': 'text/html; charset=utf-8' } });
-
-  const st = await getSettings(env);
-  let preferred = '[]', colos = '{}', entriesRaw = '[]', quality = {};
-  try {
-    if (env.KV) {
-      preferred = (await env.KV.get('preferred')) || '[]';
-      colos = (await env.KV.get('colos')) || '{}';
-      entriesRaw = (await env.KV.get('entries')) || '[]';
-      quality = JSON.parse((await env.KV.get('quality')) || '{}');
-    }
-  } catch {}
-  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const qRows = Object.entries(quality)
-    .sort((a, b) => (b[1].score ?? -1) - (a[1].score ?? -1))
-    .slice(0, 20)
-    .map(([k, v]) => `<tr><td>${esc(k.split('|')[1] || '')}</td><td>${esc(v.cc ? (CC_NAME[v.cc] || v.cc) : (v.country || '-'))}</td><td>${esc((k.split('|')[0] || '').replace(/\.pages\.dev$/, ''))}</td><td class="${v.ok ? 'ok' : 'bad'}">${v.ok ? '✓' : '✗'}</td><td>${v.tier || '-'}</td><td>${v.score ?? 0}</td><td>${v.lat ?? '-'}</td><td>${v.jitter ?? 0}</td><td>${v.tput ?? 0}</td></tr>`)
-    .join('');
-  const qualityTable = qRows
-    ? `<table><tr><th>入口</th><th>国家</th><th>数据面</th><th>状态</th><th>等级</th><th>评分</th><th>延迟ms</th><th>抖动</th><th>KB/s</th></tr>${qRows}</table>`
-    : '<div style="color:#8b9bb4;font-size:12px">暂无质量数据，先跑 tools/quality.mjs 并写入 KV 的 quality 键</div>';
-  const base = `https://${url.host}`;
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>cfmux 后台</title><style>
-body{margin:0;background:#0b1020;color:#e6edf7;font:14px/1.6 -apple-system,"PingFang SC",sans-serif}
-.wrap{max-width:980px;margin:0 auto;padding:22px}h1{font-size:18px;margin:0 0 14px}
-.card{background:#141b2f;border:1px solid #22304d;border-radius:12px;padding:16px;margin-bottom:14px}
-.card h2{font-size:13px;color:#8b9bb4;margin:0 0 10px;letter-spacing:.5px}
-textarea,input{width:100%;box-sizing:border-box;background:#0f1526;border:1px solid #22304d;color:#e6edf7;border-radius:8px;padding:9px;font:12px/1.5 ui-monospace,Menlo,monospace}
-textarea{min-height:110px;resize:vertical}
-button{background:#1d4ed8;border:0;color:#fff;border-radius:8px;padding:9px 16px;cursor:pointer;font-size:13px}
-button.alt{background:#1f2a44}a{color:#63e2b7}code{background:#0f1526;padding:1px 5px;border-radius:4px;font-size:12px}
-.row{display:flex;gap:10px;align-items:center;margin-bottom:8px}.row label{width:110px;color:#8b9bb4;font-size:12px}
-#msg{margin-top:10px;font-size:13px}table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:5px 7px;border-bottom:1px solid #1b253c;text-align:left}th{color:#8b9bb4;font-weight:500}.ok{color:#4ade80}.bad{color:#f87171}
-</style></head><body><div class="wrap">
-<h1>cfmux 后台 <span style="font-size:12px;color:#8b9bb4">已登录</span></h1>
-<div class="card"><h2>订阅</h2>
-<div><code>${base}/sub</code> · <code>${base}/sub?target=clash</code> · <code>${base}/sub?target=singbox</code></div>
-<div style="margin-top:6px;font-size:12px;color:#8b9bb4">front: <a href="/panel">/panel</a> · <a href="/diag">/diag</a> · <a href="/admin/logout">退出登录</a></div>
-</div>
-<form id="f">
-<div class="card"><h2>基本设置</h2>
-<div class="row"><label>优选源(sources)</label><input name="sources" value="${esc(st.sources)}" placeholder="逗号分隔，留空则用内置 BestCF"></div>
-<div class="row"><label>默认节点数</label><input name="limit" value="${esc(st.limit)}" placeholder="12"></div>
-</div>
-<div class="card"><h2>数据面条目 entries（JSON：name/host/uuid/path）</h2><textarea name="entries">${esc(entriesRaw)}</textarea></div>
-<div class="card"><h2>质量门槛</h2>
-<div class="row"><label>最低评分</label><input name="minScore" value="${esc(st.minScore ?? 0)}" placeholder="0-100，建议 45"></div>
-<div class="row"><label>最低吞吐 KB/s</label><input name="minTput" value="${esc(st.minTput ?? 0)}" placeholder="0，建议 80"></div>
-<div class="row"><label>数据有效期(小时)</label><input name="maxAgeHours" value="${esc(st.maxAgeHours ?? 24)}" placeholder="24"></div>
-<div class="row"><label>必须有实测</label><input name="requireQuality" value="${st.requireQuality === false ? 'false' : 'true'}" placeholder="true/false"></div>
-</div>
-<div class="card"><h2>质量表（按评分排序，前 20）</h2>${qualityTable}</div>
-<div class="card"><h2>优选表 preferred（JSON 数组）</h2><textarea name="preferred">${esc(preferred)}</textarea></div>
-<div class="card"><h2>区域映射 colos（JSON 对象 ip→colo）</h2><textarea name="colos">${esc(colos)}</textarea></div>
-<div><button type="submit">保存到 KV</button> <span id="msg"></span></div>
-</form>
-</div><script>
-document.getElementById('f').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const body = { sources: fd.get('sources'), limit: fd.get('limit'), preferred: fd.get('preferred'), colos: fd.get('colos') };
-  const r = await fetch('/admin/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  const d = await r.json().catch(()=>({}));
-  document.getElementById('msg').textContent = d.ok ? '✅ 已保存' : ('❌ ' + (d.msg || '保存失败'));
-});
-</script></body></html>`;
-  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+  return new Response(DASHBOARD_HTML, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
 }
+
+const DASHBOARD_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cfmux 管理后台</title><style>
+*{box-sizing:border-box}body{margin:0;background:#080d19;color:#e6edf7;font:14px/1.6 -apple-system,"PingFang SC",Segoe UI,sans-serif}
+.app{display:flex;min-height:100vh}
+aside{width:190px;background:#0d1424;border-right:1px solid #1b253c;padding:18px 0;flex-shrink:0}
+aside h1{font-size:15px;margin:0 18px 18px;letter-spacing:.5px}
+aside h1 span{display:block;font-size:11px;color:#5f6b80}
+nav a{display:block;padding:9px 18px;color:#8b9bb4;text-decoration:none;font-size:13px;border-left:2px solid transparent}
+nav a:hover{color:#e6edf7;background:#111a2e}nav a.on{color:#4ade80;border-left-color:#4ade80;background:#0f1a2e}
+main{flex:1;padding:22px 26px;min-width:0}
+h2{font-size:16px;margin:0 0 14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.card{background:#0f1729;border:1px solid #1b253c;border-radius:12px;padding:14px}
+.card .k{font-size:11px;color:#8b9bb4;letter-spacing:.5px}.card .v{font-size:22px;font-weight:600;margin-top:4px}
+.card .v small{font-size:12px;color:#8b9bb4;font-weight:400}
+table{width:100%;border-collapse:collapse;font-size:12.5px;background:#0f1729;border-radius:10px;overflow:hidden}
+th{color:#8b9bb4;font-weight:500;text-align:left;padding:9px 10px;background:#111a2e;position:sticky;top:0}
+td{padding:8px 10px;border-top:1px solid #16203a}
+tr:hover td{background:#111c31}
+.badge{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;border:1px solid}
+.S{color:#f0abfc;border-color:#7e22ce;background:#2a1035}.A{color:#4ade80;border-color:#166534;background:#0d2417}
+.B{color:#fbbf24;border-color:#78350f;background:#2a1f08}.C{color:#f87171;border-color:#7f1d1d;background:#2a1010}
+.ok{color:#4ade80}.bad{color:#f87171}.dim{color:#8b9bb4}
+.btn{background:#1d4ed8;border:0;color:#fff;border-radius:7px;padding:6px 12px;font-size:12px;cursor:pointer}
+.btn.alt{background:#1c2740}.btn.danger{background:#7f1d1d}.btn:hover{filter:brightness(1.15)}
+input,select,textarea{background:#0b1220;border:1px solid #1b253c;color:#e6edf7;border-radius:7px;padding:7px 9px;font-size:12.5px}
+textarea{width:100%;min-height:120px;font:12px/1.5 ui-monospace,Menlo,monospace}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.toolbar input{flex:1;min-width:160px}
+#toast{position:fixed;right:18px;bottom:18px;background:#132038;border:1px solid #1b253c;padding:10px 14px;border-radius:9px;font-size:13px;opacity:0;transition:.2s;pointer-events:none}
+#toast.on{opacity:1}
+code{background:#0b1220;padding:1px 5px;border-radius:4px;font-size:11.5px;word-break:break-all}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}aside{width:60px}aside h1 span,aside nav a{padding-left:4px;font-size:0}
+aside h1{font-size:0}}
+</style></head><body><div class="app">
+<aside><h1>cfmux<span>管理后台</span></h1>
+<nav>
+<a href="#" data-tab="overview" class="on">📊 概览</a>
+<a href="#" data-tab="nodes">🛰 节点质量</a>
+<a href="#" data-tab="subs">📥 订阅</a>
+<a href="#" data-tab="entries">🧩 数据面</a>
+<a href="#" data-tab="settings">⚙️ 设置</a>
+<a href="/panel" target="_blank">🌐 公开状态页</a>
+<a href="/admin/logout">🚪 退出</a>
+</nav></aside>
+<main>
+<section id="tab-overview">
+  <h2>概览</h2>
+  <div class="cards" id="cards"></div>
+  <div class="card"><div class="k">最近质量趋势（评分）</div><div id="spark" style="margin-top:8px"></div></div>
+  <h2 style="margin-top:20px">Top 节点</h2>
+  <div id="topNodes"></div>
+</section>
+
+<section id="tab-nodes" hidden>
+  <h2>节点质量</h2>
+  <div class="toolbar">
+    <input id="q-filter" placeholder="筛选：国家 / IP / 数据面">
+    <select id="q-tier"><option value="">全部等级</option><option>S</option><option>A</option><option>B</option><option>C</option></select>
+    <select id="q-state"><option value="">全部状态</option><option value="ok">正常</option><option value="dead">失败</option><option value="cool">熔断中</option></select>
+    <button class="btn alt" onclick="renderNodes()">刷新</button>
+  </div>
+  <div id="nodeTable"></div>
+</section>
+
+<section id="tab-subs" hidden>
+  <h2>订阅</h2>
+  <div class="grid2">
+    <div class="card"><div class="k">通用 / V2Ray</div><code id="s-base64"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-base64')">复制</button></div></div>
+    <div class="card"><div class="k">Clash / Mihomo / Stash</div><code id="s-clash"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-clash')">复制</button></div></div>
+    <div class="card"><div class="k">sing-box</div><code id="s-singbox"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-singbox')">复制</button></div></div>
+    <div class="card"><div class="k">按国家筛选（region 参数用法）</div><div class="dim" style="font-size:12px">在订阅 URL 后加 <code>&amp;like=美国</code> 或 <code>&amp;perEntry=1</code>；<code>limit</code> 控制节点数。</div></div>
+  </div>
+</section>
+
+<section id="tab-entries" hidden>
+  <h2>数据面</h2>
+  <div class="toolbar"><button class="btn" onclick="addEntry()">+ 添加数据面</button><button class="btn alt" onclick="saveEntries()">保存</button><span class="dim" id="entryHint"></span></div>
+  <div id="entryTable"></div>
+</section>
+
+<section id="tab-settings" hidden>
+  <h2>设置</h2>
+  <div class="grid2">
+    <div class="card"><div class="k">质量门槛</div>
+      <div class="toolbar" style="margin-top:10px;flex-direction:column;align-items:stretch">
+        <label class="dim" style="font-size:12px">最低评分 minScore<input id="f-minScore" type="number"></label>
+        <label class="dim" style="font-size:12px">最低吞吐 KB/s minTput<input id="f-minTput" type="number"></label>
+        <label class="dim" style="font-size:12px">数据有效期(小时) maxAgeHours<input id="f-maxAgeHours" type="number"></label>
+        <label class="dim" style="font-size:12px">每入口取几个 perEntry<input id="f-perEntry" type="number"></label>
+        <label class="dim" style="font-size:12px">必须有实测 requireQuality<select id="f-requireQuality"><option>true</option><option>false</option></select></label>
+        <label class="dim" style="font-size:12px">默认节点数 limit<input id="f-limit" type="number"></label>
+      </div>
+    </div>
+    <div class="card"><div class="k">优选源（逗号分隔 URL）</div><textarea id="f-sources" style="margin-top:10px"></textarea>
+      <div class="k" style="margin-top:10px">区域映射 colos（JSON）</div><textarea id="f-colos"></textarea>
+    </div>
+  </div>
+  <div style="margin-top:12px"><button class="btn" onclick="saveSettings()">保存设置</button></div>
+</section>
+</main></div><div id="toast"></div>
+<script>
+let STATE = null;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('on'); setTimeout(()=>t.classList.remove('on'),1800); }
+function copy(id){ const txt=$(id).textContent; navigator.clipboard.writeText(txt).then(()=>toast('已复制'),()=>toast('复制失败')); }
+document.querySelectorAll('nav a[data-tab]').forEach(a=>a.addEventListener('click',(e)=>{
+  e.preventDefault();
+  document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on')); a.classList.add('on');
+  ['overview','nodes','subs','entries','settings'].forEach(t=>$('tab-'+t).hidden = (t!==a.dataset.tab));
+}));
+
+async function load(){
+  const r = await fetch('/api/state'); STATE = await r.json();
+  renderCards(); renderSpark(); renderTop(); renderNodes(); renderSubs(); renderEntries(); fillSettings();
+}
+function renderCards(){
+  const q = STATE.quality || {}; const arr = Object.values(q);
+  const ok = arr.filter(x=>x.ok);
+  const cool = arr.filter(x=>x.cooldownUntil && x.cooldownUntil>Date.now());
+  const avg = ok.length ? (ok.reduce((s,x)=>s+(x.score||0),0)/ok.length).toFixed(1) : '-';
+  const best = ok.length ? Math.max(...ok.map(x=>x.score||0)).toFixed(1) : '-';
+  const tput = ok.length ? Math.round(ok.reduce((s,x)=>s+(x.tput||0),0)/ok.length) : 0;
+  const cards = [
+    ['达标节点', ok.length + ' <small>/ ' + arr.length + '</small>'],
+    ['平均评分', avg], ['最高评分', best], ['平均吞吐', tput + ' <small>KB/s</small>'],
+    ['熔断中', cool.length], ['数据面', (STATE.entries||[]).length],
+  ];
+  $('cards').innerHTML = cards.map(([k,v])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('');
+}
+function renderSpark(){
+  const h = STATE.history || [];
+  if (h.length < 2) { $('spark').innerHTML = '<span class="dim">暂无趋势数据（每次刷新会追加一个点）</span>'; return; }
+  const w=560,ht=80,pad=4;
+  const vals=h.map(x=>x.avg||0); const max=Math.max(...vals,1), min=Math.min(...vals,0);
+  const pts=vals.map((v,i)=>[pad+i*(w-2*pad)/(vals.length-1), ht-pad-((v-min)/(max-min||1))*(ht-2*pad)]);
+  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  $('spark').innerHTML='<svg width="'+w+'" height="'+ht+'" style="max-width:100%"><path d="'+d+'" fill="none" stroke="#4ade80" stroke-width="1.6"/>'+
+    pts.map(p=>'<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="2" fill="#4ade80"/>').join('')+
+    '<text x="4" y="10" fill="#5f6b80" font-size="10">max '+max.toFixed(0)+'</text></svg>';
+}
+function nodeRows(){
+  const q = STATE.quality || {};
+  return Object.entries(q).map(([k,v])=>{
+    const [host, ip] = k.split('|');
+    const cool = v.cooldownUntil && v.cooldownUntil > Date.now();
+    return { key:k, host, ip, ...v, cool };
+  });
+}
+function stateOf(n){ if (n.cool) return '<span class="bad">熔断</span>'; return n.ok ? '<span class="ok">正常</span>' : '<span class="bad">失败</span>'; }
+function renderTop(){
+  const arr = nodeRows().filter(n=>n.ok && !n.cool).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
+  $('topNodes').innerHTML = table(arr, ['国家','数据面','入口 IP','等级','评分','延迟','吞吐'], (n)=>[
+    n.cc ? (STATE.ccNames[n.cc]||n.cc) : (n.country||'-'),
+    n.host.replace('.pages.dev',''), n.ip,
+    '<span class="badge '+(n.tier||'C')+'">'+(n.tier||'-')+'</span>',
+    (n.score||0).toFixed(1), (n.lat||'-')+'ms', (n.tput||0)+' KB/s'
+  ]);
+}
+function renderNodes(){
+  const kw = ($('q-filter')?.value||'').toLowerCase();
+  const tier = $('q-tier')?.value||''; const st = $('q-state')?.value||'';
+  let arr = nodeRows().sort((a,b)=>(b.score||0)-(a.score||0));
+  if (kw) arr = arr.filter(n=>(n.ip+' '+n.host+' '+(n.cc||'')+' '+(n.country||'')).toLowerCase().includes(kw));
+  if (tier) arr = arr.filter(n=>n.tier===tier);
+  if (st==='ok') arr=arr.filter(n=>n.ok&&!n.cool); if (st==='dead') arr=arr.filter(n=>!n.ok); if (st==='cool') arr=arr.filter(n=>n.cool);
+  const html = table(arr, ['国家','数据面','入口','等级','评分','延迟','抖动','吞吐','失败','状态','操作'], (n)=>[
+    n.cc ? (STATE.ccNames[n.cc]||n.cc) : (n.country||'-'),
+    n.host.replace('.pages.dev',''), n.ip,
+    '<span class="badge '+(n.tier||'C')+'">'+(n.tier||'-')+'</span>',
+    (n.score||0).toFixed(1), (n.lat||'-')+'ms', (n.jitter||0)+'ms', (n.tput||0)+' KB/s',
+    (n.fails||0), stateOf(n),
+    (n.cool ? '<button class="btn alt" onclick="act(\\'unban\\',\\''+n.key+'\\')">解除</button>'
+            : '<button class="btn danger" onclick="act(\\'ban\\',\\''+n.key+'\\')">熔断</button>')
+  ]);
+  $('nodeTable').innerHTML = html;
+}
+function table(arr, cols, map){
+  if (!arr.length) return '<div class="card dim">无数据</div>';
+  return '<div style="max-height:60vh;overflow:auto"><table><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr>'+
+    arr.map(n=>'<tr>'+map(n).map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</table></div>';
+}
+function renderSubs(){
+  const base = STATE.base;
+  $('s-base64').textContent = base+'/sub';
+  $('s-clash').textContent = base+'/sub?target=clash';
+  $('s-singbox').textContent = base+'/sub?target=singbox';
+}
+function renderEntries(){
+  const e = STATE.entries||[];
+  $('entryTable').innerHTML = e.length ? '<table><tr><th>名称</th><th>域名</th><th>UUID</th><th>路径</th><th></th></tr>'+
+    e.map((x,i)=>'<tr><td><input value="'+esc(x.name)+'" oninput="EDIT.entries['+i+'].name=this.value" style="width:90px"></td>'+
+    '<td><input value="'+esc(x.host)+'" oninput="EDIT.entries['+i+'].host=this.value" style="width:230px"></td>'+
+    '<td><input value="'+esc(x.uuid)+'" oninput="EDIT.entries['+i+'].uuid=this.value" style="width:290px"></td>'+
+    '<td><input value="'+esc(x.path||'/')+'" oninput="EDIT.entries['+i+'].path=this.value" style="width:60px"></td>'+
+    '<td><button class="btn danger" onclick="delEntry('+i+')">删</button></td></tr>').join('')+'</table>'
+    : '<div class="card dim">还没有数据面</div>';
+  EDIT.entries = JSON.parse(JSON.stringify(e));
+}
+function addEntry(){ EDIT.entries.push({name:'core'+((EDIT.entries||[]).length+1),host:'',uuid:'',path:'/'}); renderEntries(); }
+function delEntry(i){ EDIT.entries.splice(i,1); renderEntries(); }
+const EDIT = { entries: [] };
+function fillSettings(){
+  const s = STATE.settings||{};
+  $('f-minScore').value = s.minScore ?? 45; $('f-minTput').value = s.minTput ?? 0;
+  $('f-maxAgeHours').value = s.maxAgeHours ?? 24; $('f-perEntry').value = s.perEntry ?? 2;
+  $('f-requireQuality').value = (s.requireQuality===false)?'false':'true'; $('f-limit').value = s.limit ?? 12;
+  $('f-sources').value = s.sources||''; $('f-colos').value = JSON.stringify(STATE.colos||{}, null, 1);
+}
+async function post(url, body){ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
+async function saveSettings(){
+  const body = { minScore:+$('f-minScore').value, minTput:+$('f-minTput').value, maxAgeHours:+$('f-maxAgeHours').value,
+    perEntry:+$('f-perEntry').value, requireQuality:$('f-requireQuality').value, limit:+$('f-limit').value,
+    sources:$('f-sources').value, colos:$('f-colos').value };
+  const d = await post('/admin/save', body); toast(d.ok?'已保存':'失败：'+(d.msg||'')); if(d.ok) load();
+}
+async function saveEntries(){
+  const d = await post('/admin/save', { entries: JSON.stringify(EDIT.entries) });
+  toast(d.ok?'数据面已保存':'失败：'+(d.msg||'')); if(d.ok) load();
+}
+async function act(type, key){ const d = await post('/api/action', {type, key}); toast(d.ok?'已执行':'失败'); if(d.ok) load(); }
+load();
+</script></body></html>`;
 
 async function adminLogin(request, env) {
   if (!env.admin_password) return new Response(loginHtml(true), { status: 503, headers: { 'content-type': 'text/html; charset=utf-8' } });

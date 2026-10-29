@@ -18,6 +18,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, arr) => (v.startsWith('--') ? [...a, [v.slice(2), arr[i + 1]]] : a), []));
 const OUT = args.out || 'quality.json';
+const COOLDOWN_H = +(args.cooldownHours || 2);
+const FAIL_THRESHOLD = +(args.failThreshold || 3);
+let PREV = {};
+try { PREV = JSON.parse(readFileSync(args.prev || OUT, 'utf8')); } catch {}
 const TMO = +(args.timeout || 8000);
 const DL = +(args.bytes || 512 * 1024);
 const ENTRIES = JSON.parse(readFileSync(args.entries, 'utf8'));
@@ -154,10 +158,20 @@ for (const e of ENTRIES) {
       const g = await geoOf(e, ip);
       if (g) { q.cc = g.cc; q.country = g.country; q.city = g.city; q.exitIp = g.ip; }
     }
-    if (!q.ok) q.err = lastErr;
+    const prev = PREV[`${e.host}|${ip}`];
+    if (q.ok) { q.fails = 0; }
+    else {
+      q.fails = ((prev && prev.fails) || 0) + 1;
+      q.err = lastErr;
+      if (q.fails >= FAIL_THRESHOLD) {
+        q.cooldownUntil = Date.now() + COOLDOWN_H * 3600 * 1000;
+        q.cooldownReason = `连续失败 ${q.fails} 次，冷却 ${COOLDOWN_H}h`;
+      }
+    }
     q.score = scoreOf(q); q.tier = tierOf(q.score);
     out[`${e.host}|${ip}`] = q;
-    console.log(`${q.ok ? '✅' : '❌'} ${e.host} @ ${ip.padEnd(16)} lat=${String(q.lat).padStart(5)} jit=${String(q.jitter).padStart(4)} tput=${String(q.tput).padStart(5)}KB/s score=${String(q.score).padStart(6)} ${q.tier} ${q.cc ? q.cc + '/' + (q.city || '') : ''} ${q.err || ''}`);
+    const cd = q.cooldownUntil ? ' ⛔熔断' : '';
+    console.log(`${q.ok ? '✅' : '❌'} ${e.host} @ ${ip.padEnd(16)} lat=${String(q.lat).padStart(5)} jit=${String(q.jitter).padStart(4)} tput=${String(q.tput).padStart(5)}KB/s score=${String(q.score).padStart(6)} ${q.tier} ${q.cc ? q.cc + '/' + (q.city || '') : ''}${cd} ${q.err || ''}`);
   }
 }
 writeFileSync(OUT, JSON.stringify(out, null, 1));
