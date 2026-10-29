@@ -113,6 +113,8 @@ export default {
     if (url.pathname === '/api/quality') return apiQuality(request, env, url);
     if (url.pathname === '/api/state') return apiState(request, env, url);
     if (url.pathname === '/api/action') return apiAction(request, env, url);
+    if (url.pathname === '/api/import') return apiImport(request, env, url);
+    if (url.pathname === '/api/trigger') return apiTrigger(request, env, url);
     if (url.pathname === '/admin') return adminPage(request, env, url);
     if (url.pathname === '/admin/login') return adminLogin(request, env, url);
     if (url.pathname === '/admin/logout') return adminLogout(request, env, url);
@@ -406,7 +408,10 @@ async function buildSubscription(request, env, url) {
         const ageH = (Date.now() - (q.ts || 0)) / 3600000;
         if (th.maxAgeHours > 0 && ageH > th.maxAgeHours) continue;   // 质量数据过期
       } else if (th.requireQuality) {
-        continue;
+        // 该数据面完全没有测速数据时，可用 ?unmeasured=1 放行（排最后）
+        if (url.searchParams.get('unmeasured') !== '1') continue;
+        const hasAny = Object.keys(quality).some((k) => k.startsWith(host + '|'));
+        if (hasAny) continue;
       }
       nodes.push({
         entry: e.name || 'core',
@@ -418,6 +423,16 @@ async function buildSubscription(request, env, url) {
       });
     }
   }
+  // 置顶节点（settings.pinned: ["host|value", ...]）排最前
+  const pinned = new Set((await getSettings(env)).pinned || []);
+  if (pinned.size) {
+    nodes.sort((a, b) => {
+      const pa = pinned.has(`${a.host}|${a.value}`) ? 1 : 0;
+      const pb = pinned.has(`${b.host}|${b.value}`) ? 1 : 0;
+      return pb - pa;   // 置顶在前，其余保持
+    });
+  }
+
   // 按国家过滤（cc=SG,JP；也可用 country=新加坡）
   const ccList = (url.searchParams.get('cc') || '').toUpperCase().split(',').map(x=>x.trim()).filter(Boolean);
   const countryLike = (url.searchParams.get('country') || '').trim();
@@ -479,8 +494,15 @@ async function apiState(request, env, url) {
       history = JSON.parse((await env.KV.get('history')) || '[]');
     }
   } catch {}
+  const entryStats = {};
+  for (const e of entries) {
+    const host = e.host || url.host;
+    const keys = Object.keys(quality).filter((k) => k.startsWith(host + '|'));
+    const okN = keys.filter((k) => quality[k] && quality[k].ok).length;
+    entryStats[e.name || host] = { host, measured: keys.length, ok: okN };
+  }
   return json({
-    base: `https://${url.host}`, settings, entries, quality, colos, preferred, history,
+    base: `https://${url.host}`, settings, entries, quality, colos, preferred, history, entryStats,
     ccNames: CC_NAME, regionNames: REGION_NAMES,
   });
 }
@@ -497,6 +519,13 @@ async function apiAction(request, env, url) {
     if (!q[key]) return json({ ok: false, msg: '节点不存在' }, 404);
     q[key].ok = false; q[key].cooldownUntil = Date.now() + 24 * 3600 * 1000;
     q[key].cooldownReason = '手动熔断';
+  } else if (type === 'pin' || type === 'unpin') {
+    const st = await getSettings(env);
+    const arr = new Set(st.pinned || []);
+    if (type === 'pin') arr.add(key); else arr.delete(key);
+    st.pinned = [...arr];
+    await env.KV.put('settings', JSON.stringify(st));
+    return json({ ok: true, pinned: st.pinned.length });
   } else if (type === 'unban') {
     if (!q[key]) return json({ ok: false, msg: '节点不存在' }, 404);
     delete q[key].cooldownUntil; delete q[key].cooldownReason; q[key].fails = 0;
@@ -505,6 +534,52 @@ async function apiAction(request, env, url) {
   }
   await env.KV.put('quality', JSON.stringify(q));
   return json({ ok: true });
+}
+
+async function apiImport(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  if (!env.KV) return json({ ok: false, msg: 'KV 未绑定' }, 503);
+  const body = await request.json().catch(() => ({}));
+  const src = String(body.url || '').trim();
+  if (!src) return json({ ok: false, msg: '缺少 url' }, 400);
+  let text = '';
+  try {
+    const r = await fetch(src, { cf: { cacheTtl: 0, timeoutMs: 8000 } });
+    if (!r.ok) return json({ ok: false, msg: `拉取失败 HTTP ${r.status}` }, 400);
+    text = await r.text();
+  } catch (e) { return json({ ok: false, msg: '拉取异常: ' + String(e).slice(0, 80) }, 400); }
+
+  const lines = text.split('\n').map((x) => x.trim().replace(/#.*$/, '')).filter((x) =>
+    x && !x.startsWith('<') && (/^[a-z0-9.*-]+(\.[a-z0-9-]+)+$/i.test(x) || /^(\d{1,3}\.){3}\d{1,3}$/.test(x)));
+  if (!lines.length) return json({ ok: false, msg: '未解析到有效 IP/域名' }, 400);
+
+  let cur = [];
+  try { cur = JSON.parse((await env.KV.get('preferred')) || '[]'); } catch {}
+  const curVals = new Set(cur.map((x) => (typeof x === 'string' ? x : x.ip)));
+  let added = 0;
+  for (const v of lines) if (!curVals.has(v)) { cur.push(v); curVals.add(v); added++; }
+  if (body.mode === 'replace') { cur = [...new Set(lines)]; added = cur.length; }
+  await env.KV.put('preferred', JSON.stringify(cur));
+  return json({ ok: true, added, total: cur.length, parsed: lines.length });
+}
+
+async function apiTrigger(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  const tok = env.gh_token, repo = env.gh_repo, wf = env.gh_workflow || 'refresh-quality.yml', ref = env.gh_ref || 'main';
+  if (!tok || !repo) {
+    return json({ ok: false, configured: false, msg: '未配置 gh_token / gh_repo（变量：gh_token, gh_repo=owner/repo）',
+      hint: '也可在本机运行：KV_ID=<id> ENTRIES_FILE=... PREF_FILE=... ./tools/refresh.sh' }, 200);
+  }
+  try {
+    const r = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${wf}/dispatches`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tok}`, Accept: 'application/vnd.github+json', 'User-Agent': 'cfmux' },
+      body: JSON.stringify({ ref, inputs: {} }),
+    });
+    if (r.status === 204) return json({ ok: true, configured: true, msg: '已触发 GitHub Actions 刷新' });
+    const t = await r.text();
+    return json({ ok: false, configured: true, msg: `GitHub 返回 ${r.status}: ${t.slice(0, 120)}` }, 200);
+  } catch (e) { return json({ ok: false, msg: String(e).slice(0, 100) }, 200); }
 }
 
 async function apiQuality(request, env, url) {
@@ -743,6 +818,7 @@ aside h1{font-size:0}}
 <a href="#" data-tab="overview" class="on">📊 概览</a>
 <a href="#" data-tab="nodes">🛰 节点质量</a>
 <a href="#" data-tab="subs">📥 订阅</a>
+<a href="#" data-tab="preferred">⭐ 优选</a>
 <a href="#" data-tab="entries">🧩 数据面</a>
 <a href="#" data-tab="settings">⚙️ 设置</a>
 <a href="/panel" target="_blank">🌐 公开状态页</a>
@@ -774,8 +850,25 @@ aside h1{font-size:0}}
     <div class="card"><div class="k">通用 / V2Ray</div><code id="s-base64"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-base64')">复制</button></div></div>
     <div class="card"><div class="k">Clash / Mihomo / Stash</div><code id="s-clash"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-clash')">复制</button></div></div>
     <div class="card"><div class="k">sing-box</div><code id="s-singbox"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-singbox')">复制</button></div></div>
+    <div class="card"><div class="k">二维码（手机扫一扫导入）</div>
+      <div id="qr" style="margin-top:8px"></div>
+      <div class="dim" style="font-size:11px;margin-top:6px">扫码后由客户端导入通用订阅</div>
+    </div>
     <div class="card"><div class="k">按国家筛选（region 参数用法）</div><div class="dim" style="font-size:12px">在订阅 URL 后加 <code>&amp;like=美国</code> 或 <code>&amp;perEntry=1</code>；<code>limit</code> 控制节点数。</div></div>
   </div>
+</section>
+
+<section id="tab-preferred" hidden>
+  <h2>优选列表</h2>
+  <div class="toolbar">
+    <input id="imp-url" placeholder="粘贴一个「一行一个」的 IP/域名 列表地址，例如 https://bestcf.fxxk.dedyn.io/cf_domains.txt">
+    <button class="btn" onclick="importPreferred()">从网址导入</button>
+    <button class="btn alt" onclick="triggerRun()">手动触发测速</button>
+  </div>
+  <div class="dim" id="prefHint" style="margin-bottom:8px"></div>
+  <textarea id="pref-text" style="min-height:300px"></textarea>
+  <div style="margin-top:10px"><button class="btn" onclick="savePreferred()">保存优选列表</button>
+    <button class="btn alt" onclick="loadPreferred()">重新读取</button></div>
 </section>
 
 <section id="tab-entries" hidden>
@@ -813,12 +906,13 @@ function copy(id){ const txt=$(id).textContent; navigator.clipboard.writeText(tx
 document.querySelectorAll('nav a[data-tab]').forEach(a=>a.addEventListener('click',(e)=>{
   e.preventDefault();
   document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on')); a.classList.add('on');
-  ['overview','nodes','subs','entries','settings'].forEach(t=>$('tab-'+t).hidden = (t!==a.dataset.tab));
+  ['overview','nodes','subs','preferred','entries','settings'].forEach(t=>$('tab-'+t).hidden = (t!==a.dataset.tab));
 }));
 
 async function load(){
   const r = await fetch('/api/state'); STATE = await r.json();
-  renderCards(); renderSpark(); renderTop(); renderNodes(); renderSubs(); renderEntries(); fillSettings();
+  EDIT.entries = JSON.parse(JSON.stringify(STATE.entries||[]));   // 只在加载时初始化
+  renderCards(); renderSpark(); renderTop(); renderNodes(); renderSubs(); renderEntries(); fillSettings(); renderPreferred();
 }
 function renderCards(){
   const q = STATE.quality || {}; const arr = Object.values(q);
@@ -832,7 +926,11 @@ function renderCards(){
     ['平均评分', avg], ['最高评分', best], ['平均吞吐', tput + ' <small>KB/s</small>'],
     ['熔断中', cool.length], ['数据面', (STATE.entries||[]).length],
   ];
-  $('cards').innerHTML = cards.map(([k,v])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('');
+  const cc = {};
+  arr.filter(x=>x.ok && x.cc).forEach(x=>{ cc[x.cc]=(cc[x.cc]||0)+1; });
+  const chips = Object.entries(cc).sort((a,b)=>b[1]-a[1]).map(([k,v])=>'<span class="badge A">'+(STATE.ccNames[k]||k)+' '+v+'</span>').join(' ');
+  $('cards').innerHTML = cards.map(([k,v])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('')
+    + '<div class="card" style="grid-column:1/-1"><div class="k">国家分布（实测）</div><div style="margin-top:6px;line-height:2">'+(chips||'<span class="dim">暂无</span>')+'</div></div>';
 }
 function renderSpark(){
   const h = STATE.history || [];
@@ -891,26 +989,27 @@ function renderSubs(){
   $('s-base64').textContent = base+'/sub';
   $('s-clash').textContent = base+'/sub?target=clash';
   $('s-singbox').textContent = base+'/sub?target=singbox';
+  $('qr').innerHTML = '<img alt="subscription qr" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(base+'/sub') + '">';
 }
 function renderEntries(){
-  const e = STATE.entries||[];
-  $('entryTable').innerHTML = e.length ? '<table><tr><th>名称</th><th>域名</th><th>UUID</th><th>路径</th><th></th></tr>'+
+  const e = EDIT.entries || [];
+  $('entryTable').innerHTML = e.length ? '<table><tr><th>名称</th><th>域名</th><th>UUID</th><th>路径</th><th>测速</th><th></th></tr>'+
     e.map((x,i)=>'<tr><td><input value="'+esc(x.name)+'" oninput="EDIT.entries['+i+'].name=this.value" style="width:90px"></td>'+
     '<td><input value="'+esc(x.host)+'" oninput="EDIT.entries['+i+'].host=this.value" style="width:230px"></td>'+
     '<td><input value="'+esc(x.uuid)+'" oninput="EDIT.entries['+i+'].uuid=this.value" style="width:290px"></td>'+
-    '<td><input value="'+esc(x.path||'/')+'" oninput="EDIT.entries['+i+'].path=this.value" style="width:60px"></td>'+
+    '<td><input value="'+esc(x.path||'/')+'" oninput="EDIT.entries['+i+'].path=this.value" style="width:50px"></td>'+
+    (function(){ const st=(STATE.entryStats||{})[x.name]||(STATE.entryStats||{})[x.host]; return '<td>'+(st? (st.ok>0?'<span class="ok">'+st.ok+'/'+st.measured+'</span>':'<span class="bad">0/'+st.measured+'</span>') : '<span class="bad">未测速</span>')+'</td>'; })()+
     '<td><button class="btn danger" onclick="delEntry('+i+')">删</button></td></tr>').join('')+'</table>'
-    : '<div class="card dim">还没有数据面</div>';
-  EDIT.entries = JSON.parse(JSON.stringify(e));
+    : '<div class="card dim">还没有数据面（点上面的「+ 添加数据面」）</div>';
 }
 function addEntry(){ EDIT.entries.push({name:'core'+((EDIT.entries||[]).length+1),host:'',uuid:'',path:'/'}); renderEntries(); }
 function delEntry(i){ EDIT.entries.splice(i,1); renderEntries(); }
 const EDIT = { entries: [] };
 function fillSettings(){
   const s = STATE.settings||{};
-  $('f-minScore').value = s.minScore ?? 45; $('f-minTput').value = s.minTput ?? 0;
-  $('f-maxAgeHours').value = s.maxAgeHours ?? 24; $('f-perEntry').value = s.perEntry ?? 2;
-  $('f-requireQuality').value = (s.requireQuality===false)?'false':'true'; $('f-limit').value = s.limit ?? 12;
+  $('f-minScore').value = s.minScore ?? 0; $('f-minTput').value = s.minTput ?? 0;
+  $('f-maxAgeHours').value = s.maxAgeHours ?? 168; $('f-perEntry').value = s.perEntry ?? 0;
+  $('f-requireQuality').value = (s.requireQuality===false)?'false':'true'; $('f-limit').value = s.limit ?? 0;
   $('f-sources').value = s.sources||''; $('f-colos').value = JSON.stringify(STATE.colos||{}, null, 1);
 }
 async function post(url, body){ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
@@ -923,6 +1022,33 @@ async function saveSettings(){
 async function saveEntries(){
   const d = await post('/admin/save', { entries: JSON.stringify(EDIT.entries) });
   toast(d.ok?'数据面已保存':'失败：'+(d.msg||'')); if(d.ok) load();
+}
+function renderPreferred(){
+  const p = STATE.preferred || [];
+  let arr = []; try { arr = typeof p === 'string' ? JSON.parse(p) : p; } catch (e) { arr = []; }
+  const txt = arr.map(x => typeof x === 'string' ? x : (x.ip || JSON.stringify(x))).join('\n');
+  $('pref-text').value = txt;
+  $('prefHint').textContent = '当前 ' + arr.length + ' 条；测速只对这里的条目 + sources 里的域名进行';
+}
+async function loadPreferred(){ await load(); toast('已重新读取'); }
+async function savePreferred(){
+  const lines = $('pref-text').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  const d = await post('/admin/save', { preferred: JSON.stringify(lines) });
+  toast(d.ok ? ('已保存 '+lines.length+' 条') : ('失败：'+(d.msg||''))); if (d.ok) load();
+}
+async function importPreferred(){
+  const u = $('imp-url').value.trim();
+  if (!u) return toast('请先填网址');
+  const d = await post('/api/import', { url: u });
+  toast(d.ok ? ('导入成功：新增 '+d.added+' 条，共 '+d.total+' 条') : ('失败：'+(d.msg||'')));
+  if (d.ok) load();
+}
+async function triggerRun(){
+  const d = await post('/api/trigger', {});
+  if (d.ok) toast(d.msg || '已触发');
+  else if (d.configured === false) { toast('未配置 gh_token，已复制本地命令'); 
+    navigator.clipboard && navigator.clipboard.writeText('cd ~/cfmux && ./tools/refresh.sh').catch(()=>{}); }
+  else toast('失败：' + (d.msg||''));
 }
 async function act(type, key){ const d = await post('/api/action', {type, key}); toast(d.ok?'已执行':'失败'); if(d.ok) load(); }
 load();
