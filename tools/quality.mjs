@@ -15,6 +15,7 @@
 import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
+import dns from 'node:dns/promises';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, arr) => (v.startsWith('--') ? [...a, [v.slice(2), arr[i + 1]]] : a), []));
 const OUT = args.out || 'quality.json';
@@ -24,6 +25,8 @@ let PREV = {};
 try { PREV = JSON.parse(readFileSync(args.prev || OUT, 'utf8')); } catch {}
 const TMO = +(args.timeout || 8000);
 const DL = +(args.bytes || 512 * 1024);
+const FAST = !!args.fast;
+const CONC = Math.max(1, +(args.concurrency || 4));   // 只做延迟+地理，用于快速发现候选
 const ENTRIES = JSON.parse(readFileSync(args.entries, 'utf8'));
 const PREFERRED = readFileSync(args.preferred, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
 
@@ -106,19 +109,23 @@ function session(entry, ip, targetHost, targetPort, reqText, readN, deadlineMs) 
   });
 }
 
-// 经隧道访问 ip-api.com，取真实出口国家/城市
+// 经隧道取真实出口国家/城市：多家源 + 重试
+const GEO_SOURCES = [
+  { host: 'ip-api.com', path: '/json/?fields=status,country,countryCode,city,query', parse: (t) => { const i = t.indexOf('{'); const j = JSON.parse(t.slice(i, t.lastIndexOf('}') + 1)); return j.status === 'success' ? { cc: j.countryCode, country: j.country, city: j.city, ip: j.query } : null; } },
+  { host: 'ipinfo.io', path: '/json', parse: (t) => { const i = t.indexOf('{'); const j = JSON.parse(t.slice(i, t.lastIndexOf('}') + 1)); return j.country ? { cc: j.country, country: j.country, city: j.city, ip: j.ip } : null; } },
+  { host: 'ip.3322.net', path: '/', parse: (t) => { const m = t.match(/(\d{1,3}(?:\.\d{1,3}){3})/); return m ? { cc: null, country: null, city: null, ip: m[1] } : null; } },
+];
 async function geoOf(entry, ip) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-  const r = await session(entry, ip, 'ip-api.com', 80,
-    'GET /json/?fields=status,country,countryCode,city,query,as HTTP/1.0\r\nHost: ip-api.com\r\n\r\n', 1500, 9000);
-  if (process.env.GEO_DEBUG) console.error('  [geo] ok=%s bytes=%s err=%s head=%s', r.ok, r.bytes, r.err, (r.text||'').slice(0,80).replace(/\n/g,' '));
-  if (!r.ok || !r.text) return null;
-  const i = r.text.indexOf('{');
-  if (i < 0) return null;
-  try {
-    const j = JSON.parse(r.text.slice(i, r.text.lastIndexOf('}') + 1));
-    return { cc: j.countryCode || null, country: j.country || null, city: j.city || null, ip: j.query || null };
-  } catch { return null; }
+  for (const src of GEO_SOURCES) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await session(entry, ip, src.host, 80,
+        `GET ${src.path} HTTP/1.0\r\nHost: ${src.host}\r\nUser-Agent: cfmux/1.0\r\n\r\n`, 2000, 8000);
+      if (!r.ok || !r.text) continue;
+      try {
+        const g = src.parse(r.text);
+        if (g && (g.cc || g.ip)) return g;
+      } catch {}
+    }
   }
   return null;
 }
@@ -135,45 +142,58 @@ function scoreOf(q) {
 const tierOf = (s) => (s >= 70 ? 'S' : s >= 45 ? 'A' : s >= 20 ? 'B' : 'C');
 
 const out = {};
-for (const e of ENTRIES) {
-  const uuidHex = (e.uuid || '').replace(/-/g, '');
-  for (const ip of PREFERRED) {
-    // 3 次 204 取抖动 + 1 次大文件取吞吐
-    const lat = []; let lastErr = null;
-    for (let i = 0; i < 3; i++) {
-      const r = await session(e, ip, 'www.gstatic.com', 80,
-        'GET /generate_204 HTTP/1.0\r\nHost: www.gstatic.com\r\n\r\n', 64, TMO);
-      if (r.ok && r.lat) lat.push(r.lat); else lastErr = r.err;
-    }
-    let q = { ok: lat.length > 0, lat: lat.length ? Math.min(...lat) : null, jitter: lat.length > 1 ? Math.max(...lat) - Math.min(...lat) : 0, tput: 0, ws: null, ts: Date.now() };
-    if (q.ok) {
-      const big = await session(e, ip, 'cachefly.cachefly.net', 80, 'GET /1mb.test HTTP/1.0\r\nHost: cachefly.cachefly.net\r\n\r\n', DL, TMO + 15000);
-      if (big.ok && big.totalMs > 0) {
-        q.ws = big.ws;
-        q.tput = Math.round((big.bytes / 1024) / (big.totalMs / 1000));   // KB/s
-        q.dlMs = big.totalMs; q.dlBytes = big.bytes;
-      }
-    }
-    if (q.ok) {
-      const g = await geoOf(e, ip);
-      if (g) { q.cc = g.cc; q.country = g.country; q.city = g.city; q.exitIp = g.ip; }
-    }
-    const prev = PREV[`${e.host}|${ip}`];
-    if (q.ok) { q.fails = 0; }
-    else {
-      q.fails = ((prev && prev.fails) || 0) + 1;
-      q.err = lastErr;
-      if (q.fails >= FAIL_THRESHOLD) {
-        q.cooldownUntil = Date.now() + COOLDOWN_H * 3600 * 1000;
-        q.cooldownReason = `连续失败 ${q.fails} 次，冷却 ${COOLDOWN_H}h`;
-      }
-    }
-    q.score = scoreOf(q); q.tier = tierOf(q.score);
-    out[`${e.host}|${ip}`] = q;
-    const cd = q.cooldownUntil ? ' ⛔熔断' : '';
-    console.log(`${q.ok ? '✅' : '❌'} ${e.host} @ ${ip.padEnd(16)} lat=${String(q.lat).padStart(5)} jit=${String(q.jitter).padStart(4)} tput=${String(q.tput).padStart(5)}KB/s score=${String(q.score).padStart(6)} ${q.tier} ${q.cc ? q.cc + '/' + (q.city || '') : ''}${cd} ${q.err || ''}`);
-  }
+const queue = [];
+for (const e of ENTRIES) for (const ip of PREFERRED) queue.push([e, ip]);
+
+async function resolveIp(host) {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+  try { const a = await dns.resolve4(host); return a[0] || null; } catch { return null; }
 }
+
+async function measureOne(e, ip) {
+  const resolved = await resolveIp(ip);
+  const lat = []; let lastErr = null;
+  const rounds = FAST ? 1 : 3;
+  for (let i = 0; i < rounds; i++) {
+    const r = await session(e, ip, 'www.gstatic.com', 80,
+      'GET /generate_204 HTTP/1.0\r\nHost: www.gstatic.com\r\n\r\n', 64, TMO);
+    if (r.ok && r.lat) lat.push(r.lat); else lastErr = r.err;
+  }
+  let q = { ok: lat.length > 0, lat: lat.length ? Math.min(...lat) : null,
+    jitter: lat.length > 1 ? Math.max(...lat) - Math.min(...lat) : 0, tput: 0, ws: null, ts: Date.now(), resolved };
+  if (q.ok && !FAST) {
+    const big = await session(e, ip, 'cachefly.cachefly.net', 80,
+      'GET /1mb.test HTTP/1.0\r\nHost: cachefly.cachefly.net\r\n\r\n', DL, TMO + 15000);
+    if (big.ok && big.totalMs > 0) {
+      q.ws = big.ws; q.tput = Math.round((big.bytes / 1024) / (big.totalMs / 1000));
+      q.dlMs = big.totalMs; q.dlBytes = big.bytes;
+    }
+  }
+  if (q.ok) {
+    const g = await geoOf(e, ip);
+    if (g) { q.cc = g.cc; q.country = g.country; q.city = g.city; q.exitIp = g.ip; }
+  }
+  const prev = PREV[`${e.host}|${ip}`];
+  if (q.ok) { q.fails = 0; }
+  else {
+    q.fails = ((prev && prev.fails) || 0) + 1; q.err = lastErr;
+    if (q.fails >= FAIL_THRESHOLD) {
+      q.cooldownUntil = Date.now() + COOLDOWN_H * 3600 * 1000;
+      q.cooldownReason = `连续失败 ${q.fails} 次，冷却 ${COOLDOWN_H}h`;
+    }
+  }
+  q.score = scoreOf(q); q.tier = tierOf(q.score);
+  out[`${e.host}|${ip}`] = q;
+  const cd = q.cooldownUntil ? ' ⛔熔断' : '';
+  console.log(`${q.ok ? '✅' : '❌'} ${e.host.replace('.pages.dev','')} @ ${ip.padEnd(26)} lat=${String(q.lat).padStart(5)} jit=${String(q.jitter).padStart(4)} tput=${String(q.tput).padStart(5)}KB/s score=${String(q.score).padStart(6)} ${q.tier} ${q.cc ? q.cc + '/' + (q.city || '') : ''}${cd} ${q.err || ''}`);
+}
+
+await Promise.all(Array.from({ length: CONC }, async () => {
+  while (queue.length) { const [e, ip] = queue.shift(); try { await measureOne(e, ip); } catch (err) { console.log('ERR', e.host, ip, String(err).slice(0, 60)); } }
+}));
+
 writeFileSync(OUT, JSON.stringify(out, null, 1));
 const okN = Object.values(out).filter((x) => x.ok).length;
-console.log(`\n可用 ${okN}/${Object.keys(out).length}，已写入 ${OUT}`);
+const ccs = {};
+for (const v of Object.values(out)) if (v.ok && v.cc) ccs[v.cc] = (ccs[v.cc] || 0) + 1;
+console.log(`\n可用 ${okN}/${Object.keys(out).length}，国家分布 ${JSON.stringify(ccs)}，已写入 ${OUT}`);

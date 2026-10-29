@@ -15,7 +15,19 @@ OUT="${OUT_FILE:-/tmp/quality.json}"
 
 [ -f "$PREF" ] || { echo "缺少优选列表 $PREF"; exit 1; }
 
-node tools/quality.mjs --entries "$ENT" --preferred "$PREF" --out "$OUT" --timeout 9000 --bytes 262144
+# 合并优选域名（默认取前 8 个；DOMAINS_N=0 可关闭）
+DOMAINS_N="${DOMAINS_N:-8}"
+DOMAIN_SRC="${DOMAIN_SRC:-https://bestcf.fxxk.dedyn.io/cf_domains.txt}"
+LIST="/tmp/cfmux_measure_list.txt"
+cat "$PREF" > "$LIST"
+if [ "$DOMAINS_N" -gt 0 ]; then
+  curl -sS --max-time 20 "$DOMAIN_SRC" 2>/dev/null | tr -d '\r' | grep -vE '^\s*(#|<|$)' | head -n "$DOMAINS_N" >> "$LIST" || true
+fi
+sort -u "$LIST" -o "$LIST"
+echo "[*] 实测清单：$(wc -l < "$LIST" | tr -d ' ') 条（IP + 域名）"
+head -20 "$LIST" | sed 's/^/     /'
+
+node tools/quality.mjs --entries "$ENT" --preferred "$LIST" --out "$OUT" --timeout 9000 --bytes 262144
 
 echo "[*] 写入 KV …"
 curl -sS --max-time 60 -X PUT \

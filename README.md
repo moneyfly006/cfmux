@@ -395,3 +395,68 @@ export PREF_FILE=/path/preferred.txt
 熔断 → /api/quality 显示 cooldown，/sub 自动剔除该节点
 订阅 perEntry=2 → 3 入口 × 2 = 6 个节点（每入口最优）
 ```
+
+## 十四、v2.3：去重 · 扩大实测 · 多源地理 · 使用说明
+
+### 1. 节点去重（默认开启）
+同一个优选域名可能解析到同一台边缘 IP，导致订阅里出现"重复 IP"。
+现在按**真实出口 IP**（geo 返回的 `query`）去重，其次按**解析 IP**，保留评分最高的一条：
+
+```
+x-cfmux-pass: 20     ← 通过质量门槛
+x-cfmux-dedup: 1     ← 被去重掉的重复项
+x-cfmux-nodes: 19    ← 实际输出
+```
+`?dedup=0` 可关闭。
+
+### 2. 扩大实测范围（达标率问题的根因）
+之前只有 13 条达标，是因为**只测了 13 个候选**（5 IP + 8 域名），其余 400+ 域名从未实测，
+`requireQuality=true` 下自然不进订阅。
+
+现在 `tools/quality.mjs` 支持**并发测量**（`--concurrency`）与**快速发现模式**（`--fast`）：
+
+```bash
+# 第一步：快速发现（只测延迟+国家，1 次探测）
+node tools/quality.mjs --entries entries.json --preferred cand.txt --out discover.json --fast --concurrency 8
+
+# 第二步：对可用候选做全量质量测量（延迟×3 + 抖动 + 吞吐 + 地理）
+node tools/quality.mjs --entries entries.json --preferred alive.txt --out quality.json --concurrency 6
+```
+
+实测：**84 个候选 → 71 可用 → 2 入口 × 71 = 142 组合全部可测**，
+国家分布 `US:38 SG:9 NL:11 DE:4 JP:3`。
+
+### 3. 多源地理探测（国家更完整）
+`ip-api.com` 有速率限制，大量测量时会失败。现在按顺序回退三个源，各重试 2 次：
+
+```
+ip-api.com/json → ipinfo.io/json → ip.3322.net（仅返回 IP）
+```
+
+节点名优先用**真实出口国家**，缺少时回退 colo 中文名，再回退 `IP/域名` 标记。
+
+### 4. 订阅默认返回全部达标节点
+`limit` 默认 `0` = 不限制（上限 300）。`perEntry` 默认 `0` = 每入口全量参与。
+需要精简时再传 `limit=10`。
+
+### 5. 使用说明（面向使用者）
+- 公开状态页 `/panel` 新增**使用说明**卡片：三步上手、全部参数含义、常见问题
+- 参数速查：
+
+| 参数 | 含义 |
+| --- | --- |
+| `target` | `base64`(默认) / `clash` / `singbox` |
+| `limit` | 节点数，0=全部（≤300） |
+| `kind` | `ip` 只要优选 IP / `domain` 只要优选域名 |
+| `like` | 关键字筛选（国家/关键字） |
+| `perEntry` | 每入口取几个（0=不限） |
+| `dedup` | `0` 关闭去重 |
+| `nocache` | `1` 跳过 60s 缓存 |
+
+### 6. 阈值可调（达标率与质量的平衡）
+| 门槛 | 默认 | 说明 |
+| --- | --- | --- |
+| `minScore` | 45 | 评分下限（0–100），调低=更多节点 |
+| `minTput` | 0 | 吞吐下限 KB/s |
+| `maxAgeHours` | 24 | 数据有效期，过期不参与 |
+| `requireQuality` | true | 无实测数据的候选一律排除 |

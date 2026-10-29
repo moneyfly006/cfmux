@@ -350,7 +350,7 @@ function regionLabel(q, e, colos) {
   if (q && q.country) return q.country;
   const c = colos && colos[e.value];
   if (c) return REGION_NAMES[c] || CC_NAME[c] || c;
-  return e.kind === 'domain' ? 'DOM' : 'IP';
+  return e.kind === 'domain' ? '域名' : 'IP';
 }
 const CC_NAME = {
   HK: '香港', TW: '台湾', JP: '日本', KR: '韩国', SG: '新加坡', MY: '马来西亚', TH: '泰国', VN: '越南',
@@ -360,6 +360,8 @@ const CC_NAME = {
 
 async function subscription(request, env, url) {
   // 边缘缓存 60s：同一订阅 URL 命中缓存直接返回，省 KV 读与 CPU
+  // ?nocache=1 可绕过缓存（改完配置立刻生效）
+  if (url.searchParams.get('nocache')) return buildSubscription(request, env, url);
   const cache = caches.default;
   const ckey = new Request(url.toString(), { method: 'GET' });
   try {
@@ -375,7 +377,9 @@ async function buildSubscription(request, env, url) {
   const target = (url.searchParams.get('target') || 'base64').toLowerCase();
   const wsPath = url.searchParams.get('path') || '/';
   const base = url.searchParams.get('name') || 'cfmux';
-  const { entries: cand, total } = await resolveEntries(request, env, url);
+  const { entries: candRaw, total } = await resolveEntries(request, env, url);
+  const kindFilter = (url.searchParams.get('kind') || '').toLowerCase();
+  const cand = kindFilter ? candRaw.filter((c) => c.kind === kindFilter) : candRaw;
   const entries = await getEntries(env);
   const quality = await getQuality(env);
   const th = await getThreshold(env);
@@ -407,11 +411,14 @@ async function buildSubscription(request, env, url) {
         value: c.value, uuid, host,
         name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
         score: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
+        cc: q ? q.cc : null, country: q ? q.country : null, exitIp: q ? q.exitIp : null,
+        dedupKey: (q && (q.exitIp || q.resolved)) || c.value,
       });
     }
   }
   // 每入口择优：先按 entry 分组各取 topK（避免某个入口霸榜），再全局排序
-  const perEntryK = Math.max(1, +(url.searchParams.get('perEntry') || (await getSettings(env)).perEntry || 2));
+  const perEntryRaw = +(url.searchParams.get('perEntry') ?? (await getSettings(env)).perEntry ?? 0);
+  const perEntryK = perEntryRaw > 0 ? perEntryRaw : 9999;   // 0 = 每入口全量
   const byEntry = new Map();
   for (const n of nodes) {
     const k = n.entry || 'core';
@@ -425,7 +432,15 @@ async function buildSubscription(request, env, url) {
   }
   // 质量排序（有分的在前，同分按吞吐）
   picked.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.tput ?? 0) - (a.tput ?? 0));
-  const limited = picked.slice(0, Math.min(+(url.searchParams.get('limit') || (await getSettings(env)).limit || 12), 300));
+  // 去重：同一真实出口 IP（或同一解析 IP）只保留评分最高的一条
+  let afterDedup = picked;
+  if (url.searchParams.get('dedup') !== '0') {
+    const seen = new Set();
+    afterDedup = picked.filter((n) => { const k = n.dedupKey; if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+  const rawLimit = +(url.searchParams.get('limit') ?? (await getSettings(env)).limit ?? 0);
+  const cap = rawLimit > 0 ? Math.min(rawLimit, 300) : 300;   // limit=0/缺省 → 全部（上限 300）
+  const limited = afterDedup.slice(0, cap);
   if (!limited.length) return json({ ok: false, msg: '没有达标节点（检查质量阈值 / 阈值过严）', total, threshold: th }, 404);
 
   const hdr = {
@@ -434,6 +449,7 @@ async function buildSubscription(request, env, url) {
     'x-cfmux-total': String(total),
     'x-cfmux-nodes': String(limited.length),
     'x-cfmux-pass': String(nodes.length),
+    'x-cfmux-dedup': String(picked.length - afterDedup.length),
     'x-cfmux-minscore': String(th.minScore),
   };
   const sn = limited.map((n) => ({ value: n.value, name: n.name, host: n.host, uuid: n.uuid }));
@@ -528,7 +544,7 @@ function clashConfig(nodes, url, wsPath) {
 
 function singboxConfig(nodes, url, wsPath) {
   const host = nodes[0]?.host;
-  const outs = nodes.map((n) => ({ type: 'vless', tag: n.name, server: n.value, server_port: 443, uuid,
+  const outs = nodes.map((n) => ({ type: 'vless', tag: n.name, server: n.value, server_port: 443, uuid: n.uuid,
     tls: { enabled: true, server_name: n.host, utls: { enabled: true, fingerprint: 'chrome' } },
     transport: { type: 'ws', path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048', headers: { Host: n.host } } }));
   return JSON.stringify({
@@ -578,6 +594,24 @@ th{color:var(--dim);font-weight:500}.ok{color:var(--acc)}.dim{color:var(--dim)}
 <div id="res" class="dim" style="margin-top:10px">加载中…</div>
 </div>
 
+<div class="card"><h2>使用说明</h2>
+<div class="dim" style="line-height:1.9;font-size:13px">
+<b class="ok">第 1 步</b>：复制下面任一订阅地址，导入客户端（Shadowrocket / Clash / sing-box）。<br>
+<b class="ok">第 2 步</b>：客户端里开启 <code>url-test</code>（自动测速）或手动选国家/延迟最低的节点。<br>
+<b class="ok">第 3 步</b>：连不上时先换节点（节点名里带国家、等级、延迟）。<br><br>
+<b>订阅地址参数</b><br>
+<code>target</code>：<code>base64</code>(默认) / <code>clash</code> / <code>singbox</code> —— 客户端格式<br>
+<code>limit</code>：节点数，<code>0</code>=全部（默认全部，上限 300）<br>
+<code>kind</code>：<code>ip</code> 只要优选 IP / <code>domain</code> 只要优选域名<br>
+<code>like</code>：关键字筛选，如 <code>like=美国</code>、<code>like=HK</code><br>
+<code>perEntry</code>：每个数据面取几个（0=不限）<br>
+<code>dedup</code>：<code>0</code> 关闭去重（默认按真实出口 IP 去重）<br>
+<code>nocache</code>：<code>1</code> 跳过 60 秒缓存，改配置后立刻生效<br><br>
+<b>常见问题</b><br>
+· <b>节点少？</b> 只有通过质量门槛（评分/吞吐/新鲜度）的节点才会出现，宁缺毋滥；后台可调门槛。<br>
+· <b>延迟高？</b> 名称里是实测延迟；优先选同国家、延迟低的；也可用 <code>like=</code> 只订某国。<br>
+· <b>某节点突然连不上？</b> 质量引擎会连续失败 3 次自动熔断并从订阅移除，恢复后自动回归。<br>
+</div></div>
 <div class="card"><h2>诊断</h2><div class="row"><a class="btn alt" target="_blank" href="${base}/healthz">/healthz</a><a class="btn alt" target="_blank" href="${base}/diag">/diag</a></div>
 <div id="diag" class="dim" style="margin-top:8px"></div></div>
 </div>
@@ -628,7 +662,7 @@ async function isAdmin(req, env) {
   return diff === 0;
 }
 async function getSettings(env) {
-  const base = { sources: '', limit: 12, host: '' };
+  const base = { sources: '', limit: 0, perEntry: 0, minScore: 45, minTput: 0, maxAgeHours: 24, requireQuality: true, host: '' };
   try {
     if (env.KV && env.KV.get) {
       const raw = await env.KV.get('settings');
@@ -912,7 +946,8 @@ async function adminSave(request, env, url) {
   try {
     const st = await getSettings(env);
     if (body.sources !== undefined) st.sources = String(body.sources || '').trim();
-    if (body.limit !== undefined) st.limit = Math.max(1, Math.min(+body.limit || 12, 300));
+    if (body.limit !== undefined) { const n = +body.limit; st.limit = Number.isFinite(n) ? Math.max(0, Math.min(n, 300)) : 12; }
+    if (body.perEntry !== undefined) { const n = +body.perEntry; st.perEntry = Number.isFinite(n) ? Math.max(0, Math.min(n, 300)) : 0; }
     if (body.preferred !== undefined) {
       const arr = JSON.parse(body.preferred || '[]');
       if (!Array.isArray(arr)) throw new Error('preferred 必须是数组');
