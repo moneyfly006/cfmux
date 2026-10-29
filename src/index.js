@@ -309,7 +309,9 @@ async function loadSources(env, request) {
 
 async function resolveEntries(request, env, url) {
   const st = await getSettings(env);
-  const limit = Math.min(+(url.searchParams.get('limit') || st.limit || 12), 300);
+  const limitRaw = url.searchParams.get('limit');
+  const limit = Math.min(limitRaw === null ? (st.limit || 0) : +limitRaw, 300);
+  const candCap = limit > 0 ? limit : 2000;   // 0/缺省 → 候选全量参与
   const wantRegion = (url.searchParams.get('region') || '').trim().toUpperCase();
   const like = (url.searchParams.get('like') || '').trim();   // 域名/IP 关键字过滤
 
@@ -341,7 +343,7 @@ async function resolveEntries(request, env, url) {
   let entries = merged;
   if (like) entries = entries.filter((e) => e.value.toLowerCase().includes(like.toLowerCase()));
   if (wantRegion) entries = entries.filter((e) => (e.colo || '').toUpperCase() === wantRegion);
-  return { entries: entries.slice(0, limit), total: merged.length, limit, wantRegion };
+  return { entries: entries.slice(0, candCap), total: merged.length, limit, wantRegion };
 }
 
 function regionLabel(q, e, colos) {
@@ -388,7 +390,7 @@ async function buildSubscription(request, env, url) {
   const hostOverride = url.searchParams.get('host') || '';
 
   // 组装候选：entry × preferred，质量优先
-  const nodes = [];
+  let nodes = [];
   for (const e of entries) {
     const host = e.host || url.host;
     const uuid = e.uuid || env.uuid;
@@ -416,6 +418,12 @@ async function buildSubscription(request, env, url) {
       });
     }
   }
+  // 按国家过滤（cc=SG,JP；也可用 country=新加坡）
+  const ccList = (url.searchParams.get('cc') || '').toUpperCase().split(',').map(x=>x.trim()).filter(Boolean);
+  const countryLike = (url.searchParams.get('country') || '').trim();
+  if (ccList.length) nodes = nodes.filter((n) => n.cc && ccList.includes(String(n.cc).toUpperCase()));
+  if (countryLike) nodes = nodes.filter((n) => (n.country || '').includes(countryLike) || (CC_NAME[n.cc] || '').includes(countryLike));
+
   // 每入口择优：先按 entry 分组各取 topK（避免某个入口霸榜），再全局排序
   const perEntryRaw = +(url.searchParams.get('perEntry') ?? (await getSettings(env)).perEntry ?? 0);
   const perEntryK = perEntryRaw > 0 ? perEntryRaw : 9999;   // 0 = 每入口全量
@@ -662,7 +670,7 @@ async function isAdmin(req, env) {
   return diff === 0;
 }
 async function getSettings(env) {
-  const base = { sources: '', limit: 0, perEntry: 0, minScore: 45, minTput: 0, maxAgeHours: 24, requireQuality: true, host: '' };
+  const base = { sources: '', limit: 0, perEntry: 0, minScore: 0, minTput: 0, maxAgeHours: 168, requireQuality: true, host: '' };
   try {
     if (env.KV && env.KV.get) {
       const raw = await env.KV.get('settings');
