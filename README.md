@@ -143,3 +143,47 @@ https://<你的域名>/sub?target=singbox  # sing-box
 ## 八、License
 
 MIT
+
+## 九、面板与优选集成（v1.1）
+
+### 面板页
+`https://<你的域名>/panel` —— 自带的可视化控制台（Pages 直接托管，无需登录）：
+
+- 一键复制/打开三种订阅（通用 / Clash / sing-box）
+- **优选资源查询**：按关键字过滤（如 `hk`、`skk.moe`、`104.17`），按区域分组展示
+- 诊断面板：实时显示 colo、sockets 可用性、uuid 是否配置
+
+### 外部优选源（IP + 域名）
+内置接入 [BestCF](https://bestcf.fxxk.dedyn.io/)（cmliu/CF-Pages-BestCF）的优选域名表，
+并可用 `env.sources` 追加任意返回「一行一个」的列表地址（自动过滤注释与 HTML）：
+
+```bash
+# 追加你自己的优选源（逗号分隔）
+sources = "https://bestcf.fxxk.dedyn.io/cf_domains.txt,https://example.com/my_ips.txt"
+```
+
+合并顺序：**KV 实测排序（preferred） > 外部源**。实测 436 条（10 IP + 426 域名）。
+
+### 按区域（国家/地区）选节点
+CF 的边缘 colo 决定回源地区，所以「选国家」= 选落地 colo。用 `tools/colos.mjs` 探测：
+
+```bash
+node tools/colos.mjs --host <你的域名> --entries ips.txt --out colos.json
+# 写入 KV 的 colos 键后，订阅即可按区域过滤
+curl "https://<域名>/sub?region=SIN&limit=20"     # 新加坡
+curl "https://<域名>/sub?region=AMS&limit=20"     # 阿姆斯特丹
+```
+
+实测区域分布（26 条抽样）：`AMS:10 LAX:6 SIN:4 FRA:2 SJC:1 NRT:1`。
+
+> ⚠️ **实测结论：区域标签 ≠ 质量**。抽样的 SIN 域名节点延迟 2.1–9.5 s、49 KB/s，
+> 反而比裸 IP（`104.17.2.1`，LAX，198 KB/s）差。原因：域名经 CNAME 到不同 colo，
+> 且同一域名在不同时刻落地不同。**所以订阅默认按实测分排序，区域只作筛选维度。**
+
+### 节点数量
+`/sub?limit=N` 支持最多 **300** 个节点（默认 12），混合 IP 与域名；
+Clash 输出自动分组 `自动优选(url-test)` + `故障切换(fallback)`。
+
+### 部署步骤（完整）
+见本文件「四、部署」+ 上面两节：建 Pages → 设 `uuid`/`KV`/`sources` → 部署 →
+跑 `measure.mjs` 写 `preferred` → 跑 `colos.mjs` 写 `colos` → 访问 `/panel` 验证。

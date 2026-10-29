@@ -108,6 +108,8 @@ export default {
     }
     if (url.pathname === '/diag') { const d = await diag(request); const o = await d.json(); o.uuidLen = uuidHex.length; o.uuidSet = !!uuidHex; o.pathKey = pathKey; return json(o); }
     if (url.pathname === '/sub') return subscription(request, env, url);
+    if (url.pathname === '/panel') return panelPage(request, env, url);
+    if (url.pathname === '/api/entries') return apiEntries(request, env, url);
 
     // 代理入口：任意路径都可，按需校验自定义路径
     if (!uuidHex || uuidHex.length !== 32) return new Response('cfmux: uuid not configured', { status: 503 });
@@ -231,48 +233,114 @@ async function proxyWebSocket(request, env, uuidHex) {
   return new Response(null, { status: 101, webSocket: client, headers: respHeaders });
 }
 
-// ---------- 控制面：订阅生成（智能优选 + 健康过滤）----------
-// 设计：优选列表由 tools/measure.mjs 在真实网络里测出来，写入 KV；
-// 订阅按「评分排序」输出，死节点（近 N 次失败）直接不出现。
-const DEFAULT_PREFERRED = [
-  '104.16.1.1', '104.16.2.1', '104.16.3.1', '104.16.4.1', '104.16.5.1',
-  '104.17.1.1', '104.17.2.1', '104.17.3.1', '104.18.1.1', '104.19.1.1',
-  '172.64.1.1', '172.66.1.1', '172.67.1.1', '172.68.1.1',
-  '162.159.1.1', '162.159.2.1', '188.114.96.1', '188.114.97.1'
-];
+// ---------- 控制面：订阅 / 面板 / 优选引擎 ----------
+const DEFAULT_PREFERRED = ['104.16.1.1','104.16.2.1','104.16.3.1','104.17.1.1','104.17.2.1','188.114.96.1','188.114.97.1'];
+// 内置的优选域名源（可在 env.sources 追加，逗号分隔 URL）
+const DEFAULT_SOURCES = ['https://bestcf.fxxk.dedyn.io/cf_domains.txt'];
+
+const REGION_NAMES = {
+  HKG: '香港', SJC: '美国-圣何塞', LAX: '美国-洛杉矶', NRT: '日本-东京', KIX: '日本-大阪',
+  SIN: '新加坡', ICN: '韩国-首尔', TPE: '台湾-台北', FRA: '德国-法兰克福', LHR: '英国-伦敦',
+  AMS: '荷兰-阿姆斯特丹', SYD: '澳洲-悉尼', MUM: '印度-孟买', DXB: '阿联酋-迪拜',
+};
+
+async function loadSources(env, request) {
+  // 合并：KV 实测优选(IP) + 外部优选域名/IP 列表（带 10 分钟边缘缓存）
+  const urls = [].concat(
+    (env.sources || '').split(',').map((s) => s.trim()).filter(Boolean),
+    DEFAULT_SOURCES
+  );
+  const out = [];
+  for (const u of urls) {
+    try {
+      const cache = caches.default;
+      const key = new Request(u, { method: 'GET' });
+      let res = await cache.match(key);
+      if (!res) {
+        res = await fetch(u, { cf: { cacheTtl: 600, cacheEverything: true, timeoutMs: 4000 } });
+        if (res.ok) await cache.put(key, res.clone());
+      }
+      if (!res || !res.ok) continue;
+      const txt = await res.text();
+      for (const line of txt.split('\n')) {
+        const v = line.trim().replace(/#.*$/, '');
+        if (!v || v.startsWith('<')) continue;
+        if (/^[a-z0-9.*-]+(\.[a-z0-9-]+)+$/i.test(v) || /^(\d{1,3}\.){3}\d{1,3}$/.test(v)) out.push(v);
+      }
+    } catch {}
+  }
+  return [...new Set(out)];
+}
+
+async function resolveEntries(request, env, url) {
+  const limit = Math.min(+(url.searchParams.get('limit') || 12), 300);
+  const wantRegion = (url.searchParams.get('region') || '').trim().toUpperCase();
+  const like = (url.searchParams.get('like') || '').trim();   // 域名/IP 关键字过滤
+
+  let ips = [];
+  try {
+    if (env.KV && typeof env.KV.get === 'function') {
+      const raw = await env.KV.get('preferred');
+      if (raw) ips = (JSON.parse(raw) || []).map((x) => (typeof x === 'string' ? x : x.ip)).filter(Boolean);
+    }
+  } catch {}
+  if (!ips.length) ips = DEFAULT_PREFERRED.slice();
+  // 外部优选（域名+IP）追加在后面，可用 like 精确挑选
+  const external = await loadSources(env, request);
+
+  let colos = {};
+  try { if (env.KV && env.KV.get) colos = JSON.parse(await env.KV.get('colos') || '{}'); } catch {}
+
+  const merged = [];
+  const seen = new Set();
+  const push = (v, kind) => {
+    const k = String(v).toLowerCase();
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    merged.push({ value: v, kind, colo: colos[v] || null });
+  };
+  ips.forEach((v) => push(v, 'ip'));
+  external.forEach((v) => push(v, /^\d+\./.test(v) ? 'ip' : 'domain'));
+
+  let entries = merged;
+  if (like) entries = entries.filter((e) => e.value.toLowerCase().includes(like.toLowerCase()));
+  if (wantRegion) entries = entries.filter((e) => (e.colo || '').toUpperCase() === wantRegion);
+  return { entries: entries.slice(0, limit), total: merged.length, limit, wantRegion };
+}
+
+function nodeName(base, e, i) {
+  const r = e.colo ? `${e.colo}` : (e.kind === 'domain' ? 'DOM' : 'IP');
+  return `${base}-${r}-${String(i + 1).padStart(3, '0')}`;
+}
 
 async function subscription(request, env, url) {
   const uuid = (env.uuid || '').trim();
   if (!uuid) return json({ ok: false, msg: 'uuid not configured' }, 503);
-
   const target = (url.searchParams.get('target') || 'base64').toLowerCase();
-  const limit = Math.min(+(url.searchParams.get('limit') || 12), 60);
-  const host = url.searchParams.get('host') || url.host;          // 代理入口域名（SNI/Host）
+  const host = url.searchParams.get('host') || url.host;
   const wsPath = url.searchParams.get('path') || '/';
-  const name = url.searchParams.get('name') || 'cfmux';
+  const base = url.searchParams.get('name') || 'cfmux';
 
-  // 优选列表：KV 优先（由测速工具写入），否则内置默认
-  let preferred = DEFAULT_PREFERRED;
-  try {
-    if (env.KV && typeof env.KV.get === 'function') {
-      const raw = await env.KV.get('preferred');
-      if (raw) {
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr) && arr.length) {
-          preferred = arr.map((x) => (typeof x === 'string' ? x : x.ip)).filter(Boolean);
-        }
-      }
-    }
-  } catch {}
+  const { entries, total } = await resolveEntries(request, env, url);
+  const nodes = entries.map((e, i) => ({ value: e.value, name: nodeName(base, e, i) }));
+  if (!nodes.length) return jsonText('no entries (check region/like filter)', 404);
 
-  const entries = preferred.slice(0, limit);
-  const nodes = entries.map((ip, i) => ({
-    ip, name: `${name}-${String(i + 1).padStart(2, '0')}`,
-  }));
+  const hdr = {
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-cfmux-total': String(total),
+    'x-cfmux-nodes': String(nodes.length),
+  };
+  if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(nodes, uuid, host, wsPath), { headers: hdr });
+  if (target === 'clash' || target === 'stash' || target === 'mihomo') return new Response(clashConfig(nodes, uuid, host, wsPath), { headers: hdr });
+  return new Response(b64(v2rayLinks(nodes, uuid, host, wsPath)), { headers: hdr });
+}
 
-  if (target === 'singbox' || target === 'sing-box') return jsonText(singboxConfig(nodes, uuid, host, wsPath));
-  if (target === 'clash') return jsonText(clashConfig(nodes, uuid, host, wsPath));
-  return jsonText(b64(v2rayLinks(nodes, uuid, host, wsPath)));
+async function apiEntries(request, env, url) {
+  const { entries, total, wantRegion } = await resolveEntries(request, env, url);
+  const byColo = {};
+  for (const e of entries) { const k = e.colo || 'UNKNOWN'; (byColo[k] ||= []).push(e.value); }
+  return json({ total, shown: entries.length, region: wantRegion || 'ALL', byColo });
 }
 
 function jsonText(body, status = 200) {
@@ -285,37 +353,86 @@ function vlessLink(n, uuid, host, wsPath) {
     encryption: 'none', security: 'tls', sni: host, fp: 'chrome',
     type: 'ws', host, path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048',
   });
-  return `vless://${uuid}@${n.ip}:443?${q.toString()}#${encodeURIComponent(n.name)}`;
+  return `vless://${uuid}@${n.value}:443?${q.toString()}#${encodeURIComponent(n.name)}`;
 }
 function v2rayLinks(nodes, uuid, host, wsPath) { return nodes.map((n) => vlessLink(n, uuid, host, wsPath)).join('\n'); }
 
 function clashConfig(nodes, uuid, host, wsPath) {
-  const proxies = nodes.map((n) => `  - {name: "${n.name}", type: vless, server: ${n.ip}, port: 443, uuid: ${uuid}, tls: true, servername: ${host}, network: ws, ws-opts: {path: "${wsPath}?ed=2048", headers: {Host: ${host}}}, udp: false, skip-cert-verify: false}`);
+  const proxies = nodes.map((n) => `  - {name: "${n.name}", type: vless, server: ${n.value}, port: 443, uuid: ${uuid}, tls: true, servername: ${host}, network: ws, ws-opts: {path: "${wsPath}?ed=2048", headers: {Host: ${host}}}, udp: false}`);
   const names = nodes.map((n) => `"${n.name}"`).join(', ');
-  return [
-    'mixed-port: 7890', 'allow-lan: false', 'mode: rule', 'log-level: warn',
-    'proxies:', ...proxies,
+  return ['mixed-port: 7890','allow-lan: false','mode: rule','log-level: warn','proxies:', ...proxies,
     'proxy-groups:',
     `  - {name: "自动优选", type: url-test, proxies: [${names}], url: "http://www.gstatic.com/generate_204", interval: 300, tolerance: 50}`,
     `  - {name: "故障切换", type: fallback, proxies: ["自动优选", ${names}], url: "http://www.gstatic.com/generate_204", interval: 120}`,
-    'rules:', '  - MATCH,故障切换',
-  ].join('\n');
+    'rules:', '  - MATCH,故障切换'].join('\n');
 }
 
 function singboxConfig(nodes, uuid, host, wsPath) {
-  const outs = nodes.map((n) => ({
-    type: 'vless', tag: n.name, server: n.ip, server_port: 443, uuid,
+  const outs = nodes.map((n) => ({ type: 'vless', tag: n.name, server: n.value, server_port: 443, uuid,
     tls: { enabled: true, server_name: host, utls: { enabled: true, fingerprint: 'chrome' } },
-    transport: { type: 'ws', path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048', headers: { Host: host } },
-  }));
+    transport: { type: 'ws', path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048', headers: { Host: host } } }));
   return JSON.stringify({
     log: { level: 'warn' },
-    inbounds: [{ type: 'mixed', listen: '127.0.0.1', listen_port: 7890 }],
+    inbounds: [{ type: 'mixed', listen: '0.0.0.0', listen_port: 7890 }],
     outbounds: [
       { type: 'urltest', tag: 'auto', outbounds: nodes.map((n) => n.name), url: 'http://www.gstatic.com/generate_204', interval: '5m', tolerance: 50 },
-      ...outs,
-      { type: 'direct', tag: 'direct' },
-    ],
+      ...outs, { type: 'direct', tag: 'direct' }],
     route: { final: 'auto' },
   }, null, 1);
+}
+
+// ---------- 面板页（Pages 上的可视化控制台）----------
+async function panelPage(request, env, url) {
+  const base = `https://${url.host}`;
+  const host = env.panel_host || url.host;
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>cfmux 面板</title>
+<style>
+:root{--bg:#0b1020;--card:#141b2f;--fg:#e6edf7;--dim:#8b9bb4;--acc:#4ade80;--warn:#fbbf24}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"PingFang SC",Segoe UI,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:24px}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--dim);margin-bottom:20px}
+.card{background:var(--card);border:1px solid #22304d;border-radius:12px;padding:16px;margin-bottom:14px}
+.card h2{font-size:14px;margin:0 0 12px;color:var(--dim);font-weight:600;letter-spacing:.5px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select{background:#0f1526;border:1px solid #22304d;color:var(--fg);border-radius:8px;padding:8px 10px;font-size:13px}
+input{flex:1;min-width:180px}
+a.btn,button{background:#1d4ed8;border:0;color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;text-decoration:none;display:inline-block}
+a.btn.alt,button.alt{background:#1f2a44}
+code{background:#0f1526;border:1px solid #22304d;border-radius:6px;padding:2px 6px;font-size:12px;word-break:break-all}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;border-bottom:1px solid #1b253c;text-align:left}
+th{color:var(--dim);font-weight:500}.ok{color:var(--acc)}.dim{color:var(--dim)}
+</style></head><body><div class="wrap">
+<h1>cfmux <span class="dim" style="font-size:12px">自研 VLESS-over-WS 边缘代理</span></h1>
+<div class="sub">数据面：<code>${host}</code> · 控制面：优选 IP/域名 → 订阅</div>
+
+<div class="card"><h2>订阅链接</h2>
+<div class="row"><span class="dim" style="width:70px">通用</span><code style="flex:1">${base}/sub</code><a class="btn alt" target="_blank" href="${base}/sub">打开</a></div>
+<div class="row" style="margin-top:6px"><span class="dim" style="width:70px">Clash</span><code style="flex:1">${base}/sub?target=clash</code><a class="btn alt" target="_blank" href="${base}/sub?target=clash">打开</a></div>
+<div class="row" style="margin-top:6px"><span class="dim" style="width:70px">sing-box</span><code style="flex:1">${base}/sub?target=singbox</code><a class="btn alt" target="_blank" href="${base}/sub?target=singbox">打开</a></div>
+<div class="dim" style="margin-top:8px">参数：<code>limit</code> 节点数(≤300) · <code>region</code> 区域(如 HKG/SIN/NRT) · <code>like</code> 关键字过滤 · <code>host</code> SNI</div>
+</div>
+
+<div class="card"><h2>优选资源</h2>
+<div class="row"><input id="kw" placeholder="关键字过滤，例如 hk / skk.moe / 104.17"><button onclick="load()">查询</button></div>
+<div id="res" class="dim" style="margin-top:10px">加载中…</div>
+</div>
+
+<div class="card"><h2>诊断</h2><div class="row"><a class="btn alt" target="_blank" href="${base}/healthz">/healthz</a><a class="btn alt" target="_blank" href="${base}/diag">/diag</a></div>
+<div id="diag" class="dim" style="margin-top:8px"></div></div>
+</div>
+<script>
+async function load(){
+  const kw=document.getElementById('kw').value.trim();
+  const r=await fetch('/api/entries?limit=300'+(kw?'&like='+encodeURIComponent(kw):''));
+  const d=await r.json(); const el=document.getElementById('res');
+  const rows=Object.entries(d.byColo||{}).map(([k,v])=>'<tr><td class="ok">'+k+'</td><td>'+v.length+'</td><td class="dim">'+v.slice(0,4).join(', ')+'</td></tr>').join('');
+  el.innerHTML='<div class="dim" style="margin-bottom:8px">共 '+d.total+' 条，显示 '+d.shown+'</div><table><tr><th>区域</th><th>数量</th><th>样例</th></tr>'+rows+'</table>';
+}
+async function diag(){ try{ const d=await (await fetch('/diag')).json();
+  document.getElementById('diag').innerHTML='colo=<b>'+d.colo+'</b> · sockets=<b class="'+(d.sockets&&d.sockets.ok?'ok':'')+'">'+(d.sockets&&d.sockets.ok?'OK':'FAIL')+'</b> · uuidSet=<b>'+(d.uuidSet?'yes':'no')+'</b>';
+}catch(e){ document.getElementById('diag').textContent='诊断失败'; } }
+load(); diag();
+</script></body></html>`;
+  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
 }
