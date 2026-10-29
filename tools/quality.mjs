@@ -27,7 +27,9 @@ const TMO = +(args.timeout || 8000);
 const DL = +(args.bytes || 512 * 1024);
 const FAST = !!args.fast;
 const CONC = Math.max(1, +(args.concurrency || 4));   // 只做延迟+地理，用于快速发现候选
-const ENTRIES = JSON.parse(readFileSync(args.entries, 'utf8'));
+const _raw = JSON.parse(readFileSync(args.entries, 'utf8'));
+const ENTRIES = Array.isArray(_raw) ? _raw : (_raw.entries || []);
+if (!ENTRIES.length) { console.error('entries 为空或格式不对:', JSON.stringify(_raw).slice(0, 120)); process.exit(1); }
 const PREFERRED = readFileSync(args.preferred, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
 
 const wsFrame = (p, op = 2) => {
