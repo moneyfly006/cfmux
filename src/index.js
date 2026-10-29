@@ -938,7 +938,7 @@ function renderSpark(){
   const w=560,ht=80,pad=4;
   const vals=h.map(x=>x.avg||0);
   const hi=Math.max(...vals), lo=Math.min(...vals);
-  const pad=Math.max(2,(hi-lo)*0.25); const max=hi+pad, min=Math.max(0,lo-pad);
+  const padv=Math.max(2,(hi-lo)*0.25); const max=hi+padv, min=Math.max(0,lo-padv);
   const pts=vals.map((v,i)=>[pad+i*(w-2*pad)/(vals.length-1), ht-pad-((v-min)/(max-min||1))*(ht-2*pad)]);
   const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
   $('spark').innerHTML='<svg width="'+w+'" height="'+ht+'" style="max-width:100%"><path d="'+d+'" fill="none" stroke="#4ade80" stroke-width="1.6"/>'+
