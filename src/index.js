@@ -148,6 +148,8 @@ export default {
     if (url.pathname === '/api/kernel') return apiKernel(request, env, url);
     if (url.pathname === '/api/traffic') return apiTraffic(request, env, url);
     if (url.pathname === '/api/stats') return apiStats(request, env, url);
+    if (url.pathname === '/api/quality/report') return apiQualityReport(request, env, url);
+    if (url.pathname === '/api/quality/entries') return apiQualityEntries(request, env, url);
     if (url.pathname === '/admin') return adminPage(request, env, url);
     if (url.pathname === '/admin/login') return adminLogin(request, env, url);
     if (url.pathname === '/admin/logout') return adminLogout(request, env, url);
@@ -322,6 +324,7 @@ async function getThreshold(env) {
     minTput: st.minTput ?? 0,
     requireQuality: st.requireQuality !== false,
     maxAgeHours: st.maxAgeHours ?? 24,
+    softExpireDays: st.softExpireDays ?? 30,
   };
 }
 
@@ -464,13 +467,21 @@ async function buildSubscription(request, env, url) {
     for (const c of cand) {
       const q = quality[`${host}|${c.value}`];
       // 有质量数据 → 必须达标；无质量数据 → 在 requireQuality=false 时才放行
+      let stale = false;
       if (q) {
         if (!q.ok) continue;
         if (q.cooldownUntil && q.cooldownUntil > Date.now()) continue;   // 熔断中
-        if ((q.score ?? 0) < th.minScore) continue;
-        if ((q.tput ?? 0) < th.minTput) continue;
         const ageH = (Date.now() - (q.ts || 0)) / 3600000;
-        if (th.maxAgeHours > 0 && ageH > th.maxAgeHours) continue;   // 质量数据过期
+        const fresh = th.maxAgeHours <= 0 || ageH <= th.maxAgeHours;
+        const hardDays = th.softExpireDays ?? 30;
+        if (!fresh) {
+          // 陈旧数据：不超过硬上限就保留，但降权并排到后面（避免测速机停机导致订阅空掉）
+          if (hardDays > 0 && ageH > hardDays * 24) continue;
+          stale = true;
+        }
+        const effScore = stale ? Math.max(0, (q.score ?? 0) - 15) : (q.score ?? 0);
+        if (effScore < th.minScore) continue;
+        if ((q.tput ?? 0) < th.minTput) continue;
       } else if (th.requireQuality) {
         // 该数据面完全没有测速数据时，可用 ?unmeasured=1 放行（排最后）
         if (url.searchParams.get('unmeasured') !== '1') continue;
@@ -479,11 +490,12 @@ async function buildSubscription(request, env, url) {
       }
       const proto = vlessOn ? 'vless' : 'trojan';
       nodes.push({
-        entry: e.name || 'core', proto, path: ePath,
+        entry: e.name || 'core', proto, path: ePath, stale,
+        score: q ? (stale ? Math.max(0, (q.score ?? 0) - 15) : q.score) : null,
         tpass: trojanOn ? (kc.tp || '').trim() : '',
         value: c.value, uuid, host,
         name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
-        score: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
+        rawScore: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
         cc: q ? q.cc : null, country: q ? q.country : null, exitIp: q ? q.exitIp : null,
         dedupKey: (q && (q.exitIp || q.resolved)) || c.value,
       });
@@ -520,7 +532,7 @@ async function buildSubscription(request, env, url) {
     picked.push(...list.slice(0, perEntryK));
   }
   // 质量排序（有分的在前，同分按吞吐）
-  picked.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (b.tput ?? 0) - (a.tput ?? 0));
+  picked.sort((a, b) => (Number(a.stale) - Number(b.stale)) || ((b.score ?? -1) - (a.score ?? -1)) || ((b.tput ?? 0) - (a.tput ?? 0)));
   // 去重：同一真实出口 IP（或同一解析 IP）只保留评分最高的一条
   let afterDedup = picked;
   if (url.searchParams.get('dedup') !== '0') {
@@ -540,6 +552,7 @@ async function buildSubscription(request, env, url) {
     'x-cfmux-pass': String(nodes.length),
     'x-cfmux-dedup': String(picked.length - afterDedup.length),
     'x-cfmux-minscore': String(th.minScore),
+    'x-cfmux-stale': String(limited.filter((n) => n.stale).length),
   };
   const sn = limited.map((n) => ({ value: n.value, name: n.name, host: n.host, uuid: n.uuid, proto: n.proto || 'vless', path: n.path || wsPath, tpass: n.tpass || '' }));
   if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(sn, url, wsPath), { headers: hdr });
@@ -703,6 +716,47 @@ async function apiTraffic(request, env, url) {
   }
   const quota = +(await getSettings(env)).dailyQuota || 100000;
   return json({ ok: true, traffic: live, quota, entries: (await getEntries(env)).length });
+}
+
+// 供 CI/其他机器上报质量数据：只需上报口令，不需要 Cloudflare Token
+function reportOk(request, env) {
+  const tok = env.report_token;
+  if (!tok) return false;
+  const got = request.headers.get('x-report-token') || '';
+  if (got.length !== tok.length) return false;
+  let diff = 0;
+  for (let i = 0; i < tok.length; i++) diff |= tok.charCodeAt(i) ^ got.charCodeAt(i);
+  return diff === 0;
+}
+
+async function apiQualityEntries(request, env, url) {
+  if (!reportOk(request, env)) return json({ ok: false, msg: '上报口令无效' }, 401);
+  const entries = await getEntries(env);
+  const preferred = await (async () => {
+    try { if (env.KV) return JSON.parse((await env.KV.get('preferred')) || '[]'); } catch {}
+    return [];
+  })();
+  return json({ ok: true, entries: entries.map((e) => ({ name: e.name, host: e.host, uuid: e.uuid, path: e.path || '/' })), preferred });
+}
+
+async function apiQualityReport(request, env, url) {
+  if (!reportOk(request, env)) return json({ ok: false, msg: '上报口令无效' }, 401);
+  if (!env.KV) return json({ ok: false, msg: 'KV 未绑定' }, 503);
+  let body;
+  try { body = await request.json(); } catch { return json({ ok: false, msg: 'bad json' }, 400); }
+  const incoming = body && body.quality;
+  if (!incoming || typeof incoming !== 'object') return json({ ok: false, msg: '缺少 quality' }, 400);
+  let cur = {};
+  try { cur = JSON.parse((await env.KV.get('quality')) || '{}'); } catch {}
+  let n = 0;
+  for (const [k, v] of Object.entries(incoming)) {
+    if (!v || typeof v !== 'object' || !v.ts) continue;
+    cur[k] = v; n++;
+  }
+  await env.KV.put('quality', JSON.stringify(cur));
+  // 记录上报来源与时间
+  try { await env.KV.put('report_meta', JSON.stringify({ ts: Date.now(), source: String(body.source || 'ci').slice(0, 40), count: n })); } catch {}
+  return json({ ok: true, merged: n, total: Object.keys(cur).length });
 }
 
 async function apiStats(request, env, url) {
