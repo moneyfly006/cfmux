@@ -1055,3 +1055,56 @@ POST /api/shortlink  {"query":"target=singbox&limit=5"}
       德国 1 · 西班牙 1 · 英国 1 · 法国 1 · 未识别 3
 ```
 （节点数从 167 降到 139，是因为 18 个低效候选处于 72 小时封禁期，到期自动重测回归）
+
+## 二十六、v3.3：短链管理 · 数据面自定义域名 · 异常通知
+
+### 1. 短链管理（列表 / 复制 / 删除）
+- `GET /api/shortlinks` 列出全部短链（KV prefix 扫描）
+- `DELETE /api/shortlinks?del=<token>` 删除即失效
+- 后台「订阅」页内置表格：短链 / 参数 / 创建时间 / 复制 / 删除
+
+实测：
+```
+生成 → /s/20103x5e4w
+列表 → 3 条
+删除 → {"ok":true,"deleted":"20103x5e4w"}
+访问 → 404
+```
+
+### 2. 数据面挂上自定义域名（防 pages.dev 被封）
+| 域名 | 指向 | 状态 |
+| --- | --- | --- |
+| `core1.moneyfly.club` | `mux-core.pages.dev` | 200 ✅ |
+| `core2.moneyfly.club` | `mux-core-2.pages.dev` | 200 ✅ |
+| `core3.moneyfly.club` | `mux-core-3.pages.dev` | 200 ✅ |
+
+迁移动作：entries 换成新域名 + 质量表键镜像（`mux-core.pages.dev|X` → `core1.moneyfly.club|X`，237 条）。
+实测节点直连：**204 → 204（2.88s），google → 302，0 错误**。
+
+### 3. 异常通知（Telegram / Webhook）
+- 配置：`tg_token` + `tg_chat`，或任意 `webhook_url`（POST `{text}`）
+- 测试按钮：`POST /api/notify/test`
+- 自动告警：单次上报失败率 **≥40%**（且 ≥10 个组合）时推送
+- 节流：10 分钟内只发一次
+
+实测：
+```
+未配置 → {"ok":false,"msg":"未配置通知渠道"}
+配置 webhook → {"ok":true,"results":["webhook:ok"]}
+模拟 12 个全失败 → {"alerted":true}
+```
+
+### 4. 部署校验升级（重要）
+之前 `check-dash.js` 检查的是**模板源码**，而 `\'`、`\n` 这类转义在运行时才展开，
+所以校验通过但线上仍可能语法错误。
+
+现在改为：**真正调用 Worker 渲染 `/admin`**（mock env）→ 拿浏览器实际收到的 HTML → 提取 `<script>` → `node --check`。
+这次正是靠新校验发现了短链列表按钮的转义错误。
+
+### 5. 当前状态
+```
+订阅：候选 433 → 通过 174 → 去重 35 → 输出 139 节点
+数据面：core1/core2/core3.moneyfly.club（3 个自定义域名）
+控制面：cfmux.pages.dev + mux.moneyfly.club
+界面回归：12/13（唯一“失败”为未修改时正确提示），0 页面错误
+```

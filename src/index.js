@@ -150,6 +150,8 @@ export default {
     if (url.pathname === '/api/stats') return apiStats(request, env, url);
     if (url.pathname === '/api/quality/report') return apiQualityReport(request, env, url);
     if (url.pathname === '/api/shortlink') return apiShortLink(request, env, url);
+    if (url.pathname === '/api/shortlinks') return apiShortLinks(request, env, url);
+    if (url.pathname === '/api/notify/test') return apiNotifyTest(request, env, url);
     if (url.pathname.startsWith('/s/')) return shortLinkRedirect(request, env, url);
     if (url.pathname === '/api/quality/entries') return apiQualityEntries(request, env, url);
     if (url.pathname === '/admin') return adminPage(request, env, url);
@@ -766,6 +768,69 @@ async function apiShortLink(request, env, url) {
   return json({ ok: true, path: '/s/' + tok, url: `https://${url.host}/s/${tok}`, query });
 }
 
+async function notify(env, text, force) {
+  const st = await getSettings(env);
+  const tg = st.tg_token, chat = st.tg_chat, hook = st.webhook_url;
+  if (!tg && !hook) return { ok: false, msg: '未配置通知渠道' };
+  if (!force) {
+    let last = 0;
+    try { last = +(await env.KV.get('notify_last') || 0); } catch {}
+    if (Date.now() - last < 600000) return { ok: false, msg: '10 分钟内已通知过（节流）' };
+  }
+  try { await env.KV.put('notify_last', String(Date.now())); } catch {}
+  const results = [];
+  if (tg && chat) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${tg}/sendMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chat, text, disable_web_page_preview: true }),
+      });
+      results.push('telegram:' + (r.ok ? 'ok' : r.status));
+    } catch (e) { results.push('telegram:err'); }
+  }
+  if (hook) {
+    try {
+      const r = await fetch(hook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      results.push('webhook:' + (r.ok ? 'ok' : r.status));
+    } catch (e) { results.push('webhook:err'); }
+  }
+  return { ok: true, results };
+}
+
+async function apiNotifyTest(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  const r = await notify(env, `cfmux 测试通知\n时间：${new Date().toLocaleString()}\n如果你看到这条，说明通知通道正常。`, true);
+  return json(r);
+}
+
+async function apiShortLinks(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  if (!env.KV) return json({ ok: false, msg: 'KV 未绑定' }, 503);
+  if (request.method === 'DELETE' || url.searchParams.get('del')) {
+    const tok = url.searchParams.get('del') || ((await request.json().catch(() => ({}))).token);
+    if (!tok) return json({ ok: false, msg: '缺少 token' }, 400);
+    await env.KV.delete('short:' + tok);
+    return json({ ok: true, deleted: tok });
+  }
+  const out = [];
+  try {
+    let cursor = undefined;
+    for (let i = 0; i < 5; i++) {
+      const page = await env.KV.list({ prefix: 'short:', cursor });
+      for (const k of page.keys) {
+        const tok = k.name.slice(6);
+        let rec = null;
+        try { rec = JSON.parse((await env.KV.get(k.name)) || 'null'); } catch {}
+        if (rec) out.push({ token: tok, query: rec.query, ts: rec.ts, note: rec.note || '', url: `https://${url.host}/s/${tok}` });
+      }
+      if (page.list_complete) break;
+      cursor = page.cursor;
+    }
+  } catch (e) { return json({ ok: false, msg: String(e).slice(0, 100) }, 200); }
+  out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return json({ ok: true, links: out, total: out.length });
+}
+
 async function shortLinkRedirect(request, env, url) {
   const tok = url.pathname.slice(3);
   let rec = null;
@@ -858,7 +923,21 @@ async function apiQualityReport(request, env, url) {
 
   // 记录上报来源与时间
   try { await env.KV.put('report_meta', JSON.stringify({ ts: Date.now(), source: String(body.source || 'ci').slice(0, 40), count: n })); } catch {}
-  return json({ ok: true, merged: n, total: Object.keys(cur).length, promoted, pruned, unbanned: typeof unbanned !== 'undefined' ? unbanned : 0 });
+  // 异常告警：本轮上报里失败占比过高，或淘汰量过大
+  let alerted = false;
+  try {
+    const rep = Object.values(incoming).filter((v) => v && typeof v === 'object');
+    const dead = rep.filter((v) => v.ok === false).length;
+    const ratio = rep.length ? dead / rep.length : 0;
+    if (ratio >= 0.4 && rep.length >= 10) {
+      const r = await notify(env, `⚠️ cfmux 告警
+本轮上报 ${rep.length} 个组合，失败 ${dead} 个（${Math.round(ratio*100)}%）
+来源：${body.source || 'unknown'}
+时间：${new Date().toLocaleString()}`);
+      alerted = r.ok;
+    }
+  } catch {}
+  return json({ ok: true, merged: n, total: Object.keys(cur).length, promoted, pruned, unbanned: typeof unbanned !== 'undefined' ? unbanned : 0, alerted });
 }
 
 async function apiStats(request, env, url) {
@@ -1172,7 +1251,8 @@ aside h1{font-size:0}}
       <input id="sl-query" placeholder="参数，如 target=clash&amp;limit=50&amp;cc=SG">
       <button class="btn" onclick="makeShort(this)">生成短链</button>
     </div>
-    <div id="sl-out" class="dim" style="font-size:12px;margin-top:8px">生成后可分发，删除对应 KV 键即失效</div>
+    <div id="sl-out" class="dim" style="font-size:12px;margin-top:8px">生成后可分发，删除即失效</div>
+    <div id="sl-list" style="margin-top:10px"></div>
   </div>
   <div class="card" style="margin-top:12px"><div class="k">二维码（手机扫一扫）</div><div id="qr" style="margin-top:10px"></div>
     <div class="dim" style="font-size:11px;margin-top:6px">通用订阅，客户端自动识别</div></div>
@@ -1255,6 +1335,14 @@ aside h1{font-size:0}}
         <label class="dim" style="font-size:12px">默认节点数 limit<input id="f-limit" type="number"></label>
       </div>
     </div>
+    <div class="card"><div class="k">通知（Telegram / Webhook）</div>
+      <div class="toolbar" style="flex-direction:column;align-items:stretch;margin-top:10px">
+        <label class="dim" style="font-size:12px">Telegram Bot Token<input id="f-tg_token" placeholder="123456:ABC..."></label>
+        <label class="dim" style="font-size:12px">Telegram Chat ID<input id="f-tg_chat" placeholder="-1001234567890"></label>
+        <label class="dim" style="font-size:12px">Webhook URL<input id="f-webhook_url" placeholder="https://..."></label>
+      </div>
+      <div style="margin-top:10px"><button class="btn alt" onclick="testNotify(this)">发送测试通知</button><span id="st-notify" class="status"></span></div>
+    </div>
     <div class="card"><div class="k">优选源（逗号分隔 URL）</div><textarea id="f-sources" style="margin-top:10px"></textarea>
       <div class="k" style="margin-top:10px">区域映射 colos（JSON）</div><textarea id="f-colos"></textarea>
     </div>
@@ -1273,7 +1361,7 @@ function busy(btn, label, fn){
   if (btn) { btn.disabled = true; btn.textContent = label || '处理中…'; }
   return Promise.resolve().then(fn).finally(()=>{ if (btn) { btn.disabled=false; btn.textContent = old; } });
 }
-function copyById(el){ copy(el.dataset.copy); }
+function copyById(el){ copy(el.dataset.copy || el.dataset.copytext); }
 async function makeShort(btn){
   const q = ($('sl-query').value || '').trim();
   return busy(btn, '生成中…', async () => {
@@ -1283,7 +1371,26 @@ async function makeShort(btn){
       + '<button class="btn alt" id="sl-copy">复制短链</button>';
     $('sl-copy').onclick = function(){ copyText(d.url); toast('短链已复制'); };
     toast('短链已生成');
+    loadShortLinks();
   });
+}
+async function loadShortLinks(){
+  const el = $('sl-list'); if (!el) return;
+  const d = await (await fetch('/api/shortlinks')).json();
+  if (!d.ok) { el.innerHTML = ''; return; }
+  if (!d.links.length) { el.innerHTML = '<div class="dim" style="font-size:12px">还没有短链</div>'; return; }
+  el.innerHTML = '<table><tr><th>短链</th><th>参数</th><th>创建时间</th><th>操作</th></tr>'
+    + d.links.map((x,i) => '<tr><td><a href="'+x.url+'" target="_blank">/s/'+x.token+'</a></td><td class="dim">'
+      + esc(x.query) + '</td><td class="dim">' + new Date(x.ts).toLocaleString() + '</td><td>'
+      + '<button class="btn alt" data-copytext="'+x.url+'" onclick="copyById(this)">复制</button> '
+      + '<button class="btn danger" data-tok="'+x.token+'" onclick="delShort(this)">删除</button></td></tr>').join('')
+    + '</table>';
+}
+async function delShort(btn){
+  const tok = btn.dataset.tok;
+  const d = await post('/api/shortlinks?del=' + encodeURIComponent(tok), {});
+  toast(d.ok ? '已删除' : ('删除失败：' + (d.msg||'')), !d.ok);
+  if (d.ok) loadShortLinks();
 }
 function copy(id){
   const txt = $(id).textContent;
@@ -1313,7 +1420,7 @@ async function load(){
   const r = await fetch('/api/state'); STATE = await r.json();
   EDIT.entries = JSON.parse(JSON.stringify(STATE.entries||[]));   // 只在加载时初始化
   renderCards(); renderSpark(); renderTop(); renderNodes(); renderSubs(); renderEntries(); fillSettings(); renderPreferred();
-  renderPlanes(); loadTraffic().catch(()=>{}); renderFunnel().catch(()=>{});
+  renderPlanes(); loadTraffic().catch(()=>{}); renderFunnel().catch(()=>{}); loadShortLinks().catch(()=>{});
 }
 async function renderFunnel(){
   try {
@@ -1454,6 +1561,7 @@ function fillSettings(){
   $('f-softExpireDays').value = s.softExpireDays ?? 30; $('f-pruneStrikes').value = s.pruneStrikes ?? 4;
   $('f-pruneFloor').value = s.pruneFloor ?? 120; $('f-banHours').value = s.banHours ?? 72;
   $('f-promoteMinScore').value = s.promoteMinScore ?? 55;
+  $('f-tg_token').value = s.tg_token||''; $('f-tg_chat').value = s.tg_chat||''; $('f-webhook_url').value = s.webhook_url||'';
   $('f-sources').value = s.sources||''; $('f-colos').value = JSON.stringify(STATE.colos||{}, null, 1);
 }
 async function post(url, body){ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
@@ -1464,7 +1572,8 @@ async function saveSettings(btn){
       sources:$('f-sources').value, colos:$('f-colos').value,
       softExpireDays:+$('f-softExpireDays').value, pruneStrikes:+$('f-pruneStrikes').value,
       pruneFloor:+$('f-pruneFloor').value, banHours:+$('f-banHours').value,
-      promoteMinScore:+$('f-promoteMinScore').value };
+      promoteMinScore:+$('f-promoteMinScore').value,
+      tg_token:$('f-tg_token').value, tg_chat:$('f-tg_chat').value, webhook_url:$('f-webhook_url').value };
     const el = $('st-settings'); status(el, '保存中…', true);
     const d = await post('/admin/save', body);
     if (d.ok) { status(el, '已保存 ' + new Date().toLocaleTimeString(), true); toast('设置已保存并生效'); await load(); }
@@ -1630,6 +1739,14 @@ function openTriggerHelp(){
 }
 
 function doAct(el){ act(el.dataset.act, el.dataset.key); }
+async function testNotify(btn){
+  return busy(btn, '发送中…', async () => {
+    const d = await post('/api/notify/test', {});
+    const el = $('st-notify');
+    if (d.ok) { status(el, '已发送：' + (d.results||[]).join(' '), true); toast('测试通知已发送'); }
+    else { status(el, '失败：' + (d.msg||''), false); toast('发送失败：' + (d.msg||''), true); }
+  });
+}
 async function act(type, key){
   const label = {pin:'置顶',unpin:'取消置顶',ban:'熔断',unban:'解除'}[type] || type;
   const d = await post('/api/action', {type, key});
@@ -1685,6 +1802,9 @@ async function adminSave(request, env, url) {
     if (body.banHours !== undefined) st.banHours = Math.max(1, +body.banHours || 72);
     if (body.promoteMinScore !== undefined) st.promoteMinScore = Math.max(0, Math.min(+body.promoteMinScore || 55, 100));
     if (body.autoPromote !== undefined) st.autoPromote = String(body.autoPromote).toLowerCase() !== 'false';
+    if (body.tg_token !== undefined) st.tg_token = String(body.tg_token || '').trim();
+    if (body.tg_chat !== undefined) st.tg_chat = String(body.tg_chat || '').trim();
+    if (body.webhook_url !== undefined) st.webhook_url = String(body.webhook_url || '').trim();
     if (body.requireQuality !== undefined) st.requireQuality = String(body.requireQuality).toLowerCase() !== 'false';
     if (body.colos !== undefined) {
       const obj = JSON.parse(body.colos || '{}');
