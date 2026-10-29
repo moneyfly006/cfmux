@@ -1,8 +1,8 @@
 name: refresh-quality
 on:
   schedule:
-    - cron: '17 */3 * * *'   # 每 3 小时（云端保活，Mac 关机也能跑）
-  workflow_dispatch:
+    - cron: '17 */3 * * *'
+  workflow_dispatch: {}
 jobs:
   measure:
     runs-on: ubuntu-latest
@@ -10,25 +10,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      - name: Fetch entries from panel
+        with:
+          node-version: '22'
+      - name: Fetch entries
         env:
           BASE: ${{ vars.CFMUX_BASE }}
           TOKEN: ${{ secrets.CFMUX_REPORT_TOKEN }}
         run: |
           curl -sS --max-time 30 "$BASE/api/quality/entries" -H "x-report-token: $TOKEN" -o entries.json
-          python3 -c "import json;d=json.load(open('entries.json'));print('entries:',len(d['entries']),'preferred:',len(d['preferred']));open('pref.txt','w').write(chr(10).join(map(str,d['preferred'][:40])))"
+          node -e "const d=require('./entries.json');require('fs').writeFileSync('pref.txt', (d.preferred||[]).slice(0,40).join('\n'));console.log('entries',d.entries.length,'pref',Math.min(40,(d.preferred||[]).length))"
       - name: Measure
-        run: |
-          node tools/quality.mjs --entries entries.json --preferred pref.txt --out quality.json --timeout 8000 --bytes 262144 --concurrency 6 || true
-      - name: Report to panel
+        run: node tools/quality.mjs --entries entries.json --preferred pref.txt --out quality.json --timeout 8000 --bytes 262144 --concurrency 6 || true
+      - name: Report
         env:
           BASE: ${{ vars.CFMUX_BASE }}
           TOKEN: ${{ secrets.CFMUX_REPORT_TOKEN }}
         run: |
-          python3 -c "
-import json
-q=json.load(open('quality.json'))
-json.dump({'source':'github-actions','quality':q}, open('report.json','w'))
-print('report items:', len(q))"
+          node -e "const q=require('./quality.json');require('fs').writeFileSync('report.json',JSON.stringify({source:'github-actions',quality:q}));console.log('report',Object.keys(q).length)"
           curl -sS --max-time 60 -X POST "$BASE/api/quality/report" -H "x-report-token: $TOKEN" -H "Content-Type: application/json" --data-binary @report.json
