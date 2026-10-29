@@ -936,7 +936,9 @@ function renderSpark(){
   const h = STATE.history || [];
   if (h.length < 2) { $('spark').innerHTML = '<span class="dim">暂无趋势数据（每次刷新会追加一个点）</span>'; return; }
   const w=560,ht=80,pad=4;
-  const vals=h.map(x=>x.avg||0); const max=Math.max(...vals,1), min=Math.min(...vals,0);
+  const vals=h.map(x=>x.avg||0);
+  const hi=Math.max(...vals), lo=Math.min(...vals);
+  const pad=Math.max(2,(hi-lo)*0.25); const max=hi+pad, min=Math.max(0,lo-pad);
   const pts=vals.map((v,i)=>[pad+i*(w-2*pad)/(vals.length-1), ht-pad-((v-min)/(max-min||1))*(ht-2*pad)]);
   const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
   $('spark').innerHTML='<svg width="'+w+'" height="'+ht+'" style="max-width:100%"><path d="'+d+'" fill="none" stroke="#4ade80" stroke-width="1.6"/>'+
@@ -965,7 +967,7 @@ function renderNodes(){
   const kw = ($('q-filter')?.value||'').toLowerCase();
   const tier = $('q-tier')?.value||''; const st = $('q-state')?.value||'';
   let arr = nodeRows().sort((a,b)=>(b.score||0)-(a.score||0));
-  if (kw) arr = arr.filter(n=>(n.ip+' '+n.host+' '+(n.cc||'')+' '+(n.country||'')).toLowerCase().includes(kw));
+  if (kw) arr = arr.filter(n=>((n.ip+' '+n.host+' '+(n.cc||'')+' '+(n.country||'')+' '+((STATE.ccNames||{})[n.cc]||'')).toLowerCase().includes(kw)));
   if (tier) arr = arr.filter(n=>n.tier===tier);
   if (st==='ok') arr=arr.filter(n=>n.ok&&!n.cool); if (st==='dead') arr=arr.filter(n=>!n.ok); if (st==='cool') arr=arr.filter(n=>n.cool);
   const html = table(arr, ['国家','数据面','入口','等级','评分','延迟','抖动','吞吐','失败','状态','操作'], (n)=>[
@@ -974,8 +976,9 @@ function renderNodes(){
     '<span class="badge '+(n.tier||'C')+'">'+(n.tier||'-')+'</span>',
     (n.score||0).toFixed(1), (n.lat||'-')+'ms', (n.jitter||0)+'ms', (n.tput||0)+' KB/s',
     (n.fails||0), stateOf(n),
-    (n.cool ? '<button class="btn alt" onclick="act(\\'unban\\',\\''+n.key+'\\')">解除</button>'
-            : '<button class="btn danger" onclick="act(\\'ban\\',\\''+n.key+'\\')">熔断</button>')
+    '<button class="btn alt" data-act="pin" data-key="'+n.key+'" onclick="doAct(this)">置顶</button> ' +
+    (n.cool ? '<button class="btn alt" data-act="unban" data-key="'+n.key+'" onclick="doAct(this)">解除</button>'
+            : '<button class="btn danger" data-act="ban" data-key="'+n.key+'" onclick="doAct(this)">熔断</button>')
   ]);
   $('nodeTable').innerHTML = html;
 }
@@ -1026,13 +1029,13 @@ async function saveEntries(){
 function renderPreferred(){
   const p = STATE.preferred || [];
   let arr = []; try { arr = typeof p === 'string' ? JSON.parse(p) : p; } catch (e) { arr = []; }
-  const txt = arr.map(x => typeof x === 'string' ? x : (x.ip || JSON.stringify(x))).join('\n');
+  const txt = arr.map(x => typeof x === 'string' ? x : (x.ip || JSON.stringify(x))).join('\\n');
   $('pref-text').value = txt;
   $('prefHint').textContent = '当前 ' + arr.length + ' 条；测速只对这里的条目 + sources 里的域名进行';
 }
 async function loadPreferred(){ await load(); toast('已重新读取'); }
 async function savePreferred(){
-  const lines = $('pref-text').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  const lines = $('pref-text').value.split('\\n').map(x=>x.trim()).filter(Boolean);
   const d = await post('/admin/save', { preferred: JSON.stringify(lines) });
   toast(d.ok ? ('已保存 '+lines.length+' 条') : ('失败：'+(d.msg||''))); if (d.ok) load();
 }
@@ -1050,6 +1053,7 @@ async function triggerRun(){
     navigator.clipboard && navigator.clipboard.writeText('cd ~/cfmux && ./tools/refresh.sh').catch(()=>{}); }
   else toast('失败：' + (d.msg||''));
 }
+function doAct(el){ act(el.dataset.act, el.dataset.key); }
 async function act(type, key){ const d = await post('/api/action', {type, key}); toast(d.ok?'已执行':'失败'); if(d.ok) load(); }
 load();
 </script></body></html>`;
