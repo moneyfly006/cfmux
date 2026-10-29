@@ -1,0 +1,85 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1680px;height:1080px;background:#070b14;font-family:-apple-system,"PingFang SC",sans-serif;color:#e6edf7;padding:34px}
+h1{font-size:26px;margin-bottom:6px}
+.sub{color:#8b9bb4;font-size:14px;margin-bottom:26px}
+.lane{display:flex;gap:18px;align-items:stretch}
+.col{background:#0d1424;border:1px solid #1b253c;border-radius:14px;padding:16px;flex:1}
+.col h2{font-size:13px;color:#8b9bb4;letter-spacing:.6px;margin-bottom:12px;font-weight:600}
+.box{background:#111c31;border:1px solid #25324d;border-radius:10px;padding:11px 13px;margin-bottom:10px;font-size:13.5px;line-height:1.7}
+.box b{color:#7dd3fc}
+.box .t{font-size:12px;color:#8b9bb4}
+.arrow{display:flex;align-items:center;justify-content:center;color:#4ade80;font-size:22px;padding:0 2px}
+.step{background:#0f1a2e;border-left:3px solid #4ade80;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:13.5px;line-height:1.85}
+.step b{color:#4ade80}
+.code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#0b1220;border:1px solid #1b253c;border-radius:6px;padding:2px 6px;color:#93c5fd}
+.pill{display:inline-block;background:#132038;border:1px solid #25324d;border-radius:99px;padding:2px 10px;font-size:11.5px;color:#9fb3d1;margin-right:6px}
+.flow{display:flex;align-items:center;gap:10px;margin:14px 0 22px;flex-wrap:nowrap}
+.node{background:#111c31;border:1px solid #25324d;border-radius:10px;padding:10px 14px;font-size:13px;text-align:center;white-space:nowrap}
+.node .s{display:block;font-size:11px;color:#8b9bb4;margin-top:3px}
+.node.hl{border-color:#4ade80;box-shadow:0 0 0 1px #4ade8040 inset}
+.ar{color:#4ade80;font-size:20px}
+.note{color:#8b9bb4;font-size:12px;margin-top:8px;line-height:1.7}
+</style></head><body>
+<h1>cfmux 整条链路</h1>
+<div class="sub">控制面（管配置/测速/发订阅） 与 数据面（真正转发流量）是两套独立部署，通过 KV 解耦</div>
+
+<div class="flow">
+  <div class="node hl">① 手机 / 电脑<span class="s">Shadowrocket · Clash · sing-box</span></div><div class="ar">→</div>
+  <div class="node">② 导入订阅<span class="s">GET /sub</span></div><div class="ar">→</div>
+  <div class="node hl">③ CF 边缘 IP<span class="s">优选入口 104.x / 域名</span></div><div class="ar">→</div>
+  <div class="node">④ 数据面 Worker<span class="s">mux-core.pages.dev</span></div><div class="ar">→</div>
+  <div class="node">⑤ 目标网站<span class="s">google / github</span></div>
+</div>
+
+<div class="lane">
+  <div class="col">
+    <h2>控制面 · cfmux.pages.dev（你打开的后台）</h2>
+    <div class="box"><b>/admin</b> 后台仪表盘 · 密码登录<span class="t"><br>改设置 / 管数据面 / 导入优选 / 改内核配置</span></div>
+    <div class="box"><b>/sub</b> 生成订阅<span class="t"><br>读 KV → 过滤 → 排序 → 输出 7 种格式</span></div>
+    <div class="box"><b>/panel</b> 公开状态页 · <b>/api/stats</b> 漏斗</div>
+    <div class="box"><b>/api/kernel</b> 代理读写数据面内核配置</div>
+    <div class="note">它<b>不转发</b>任何代理流量，只负责“决定给客户端哪些节点”。</div>
+  </div>
+
+  <div class="arrow">⇄</div>
+
+  <div class="col" style="max-width:330px">
+    <h2>KV 存储（两边都读）</h2>
+    <div class="box"><b>entries</b> 数据面清单<span class="t"><br>host / uuid / 名称</span></div>
+    <div class="box"><b>preferred</b> 优选入口<span class="t"><br>IP + 域名</span></div>
+    <div class="box"><b>quality</b> 测速结果<span class="t"><br>host|入口 → 延迟/吞吐/国家/评分</span></div>
+    <div class="box"><b>kcfg:&lt;host&gt;</b> 内核配置镜像<span class="t"><br>协议开关 / WS 路径</span></div>
+    <div class="box"><b>settings</b> 门槛 / 置顶 / 熔断</div>
+  </div>
+
+  <div class="arrow">⇄</div>
+
+  <div class="col">
+    <h2>你的 Mac（测速机）</h2>
+    <div class="box"><b>tools/quality.mjs</b> 每 2 小时<span class="t"><br>对「数据面 × 入口」逐个实测</span></div>
+    <div class="box">TLS+WS 握手 → 204×3（延迟/抖动）<span class="t"><br>→ 下载 256KB（吞吐）→ 查出口国家</span></div>
+    <div class="box">算分 S/A/B/C → <b>写 KV quality</b></div>
+    <div class="note">为什么必须在这跑：<br>只有客户端能看到「你的网络 → CF 边缘」这段延迟。</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:18px;margin-top:22px">
+  <div style="flex:1">
+    <h2 style="font-size:14px;color:#8b9bb4;margin-bottom:10px">数据面 · mux-core / core2 / core3（真正转发）</h2>
+    <div class="step"><b>④</b> 客户端用 TLS 连到「优选 IP:443」，SNI/Host = <span class="code">mux-core.pages.dev</span><br>
+      CF 边缘按 Host 把请求路由到对应 Pages 项目的 Worker</div>
+    <div class="step"><b>⑤</b> Worker 解析 WebSocket 里的 VLESS 头，拿到目标 <span class="code">www.google.com:443</span><br>
+      用 <span class="code">connect()</span> 建立 TCP，双向 pipe 转发</div>
+    <div class="step"><b>⑥</b> 目标响应原路返回：Worker → CF 边缘 → 你的客户端</div>
+  </div>
+  <div style="flex:1">
+    <h2 style="font-size:14px;color:#8b9bb4;margin-bottom:10px">四段链路（哪段决定快慢）</h2>
+    <div class="step">A. 你 → CF 边缘 IP：<b>由优选入口决定</b>（测速表里的延迟）</div>
+    <div class="step">B. 边缘 → Worker：CF 内部，通常 &lt;5ms</div>
+    <div class="step">C. Worker → 目标：<b>由落地机房决定</b>（测速表里的国家/吞吐）</div>
+    <div class="step">D. 目标 → 你：原路返回</div>
+    <div class="note">所以「优选 IP」只优化 A 段；「出口国家」决定 C 段的远近。</div>
+  </div>
+</div>
+</body></html>

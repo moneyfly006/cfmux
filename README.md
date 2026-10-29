@@ -888,3 +888,67 @@ https://mux.moneyfly.club/sub     → 200（limit=5 时返回 5 个节点）
 # 2) tools/check-dash.js 渲染模板 → 提取 <script> → node --check
 # 3) wrangler pages deploy
 ```
+
+## 二十三、整条链路图（一张图看懂）
+
+![架构图](docs/architecture.png)
+
+### 阶段 0：部署了什么（两套独立部署）
+
+| 部署 | 地址 | 职责 | 是否转发流量 |
+| --- | --- | --- | --- |
+| **控制面** | `cfmux.pages.dev` / `mux.moneyfly.club` | 后台、订阅、统计、内核代理 | ❌ 不转发 |
+| **数据面** | `mux-core.pages.dev`、`-2`、`-3` | VLESS/Trojan 解析 + `connect()` 转发 | ✅ 真正转发 |
+| **KV** | cfmux 项目的 KV | entries/preferred/quality/kcfg/settings | — |
+| **测速机** | 你的 Mac（launchd） | 实测质量 → 写 KV | ❌ |
+
+### 阶段 1：配置（你在后台操作）
+```
+改设置   → POST /admin/save  → 写 KV settings
+导优选   → POST /api/import  → 抓取列表 → 写 KV preferred
+改内核   → POST /api/kernel  → 转发到数据面 + 写 KV kcfg:<host>
+加数据面 → POST /admin/save  → 写 KV entries
+```
+
+### 阶段 2：测速（Mac，每 2 小时）
+```
+quality.mjs
+  for 每个数据面 × 每个优选入口:
+     TLS+WS 握手 → 204×3（延迟/抖动）→ 下载 256KB（吞吐）→ 查出口国家
+     → 评分 S/A/B/C → 写 KV quality["host|入口"]
+举例：mux-core × skk.moe → 延迟 803ms、吞吐 142KB/s、出口 US → 68 分 A
+```
+
+### 阶段 3：订阅（客户端扫码/导入）
+```
+客户端 GET https://cfmux.pages.dev/sub
+  → 控制面读 KV（entries + preferred + quality + kcfg + settings）
+  → 内核闸门（协议/路径）→ 质量闸门（评分/时效/熔断）→ 去重 → 排序 → 截断
+  → 输出 108 个节点（base64 / clash / singbox / …）
+```
+
+### 阶段 4：真正上网（一次请求的完整路径）
+```
+① 客户端选节点：vless://<uuid>@104.17.2.1:443?host=mux-core.pages.dev&path=/?ed=2048
+② 客户端 TLS 连 104.17.2.1:443，SNI = mux-core.pages.dev
+③ CF 边缘按 Host 路由到 mux-core 这个 Pages 项目的 Worker
+④ Worker 从 WebSocket 帧里解出 VLESS 头：目标 www.google.com:443
+⑤ Worker 用 connect() 建 TCP，双向 pipe 转发
+⑥ 响应原路返回：Worker → CF 边缘 → 客户端
+```
+
+### 关键理解（容易混淆的三点）
+
+1. **订阅里的 `server` 是「入口 IP」，不是出口**
+   同一个入口 IP 路由到哪个数据面，由 `host/SNI` 决定；出口在哪，由数据面 Worker 所在机房决定（测出来的国家）。
+
+2. **一个订阅能有 108 个节点**
+   3 个数据面 × 各自通过质量门槛的入口；去重后同一个出口 IP 只留评分最高的一条。
+
+3. **四段链路哪段决定快慢**
+   | 段 | 路径 | 由什么决定 |
+   | --- | --- | --- |
+   | A | 你 → CF 边缘 IP | **优选入口**（测速表的延迟） |
+   | B | 边缘 → Worker | CF 内部，通常 <5ms |
+   | C | Worker → 目标 | **落地机房**（测速表的国家/吞吐） |
+   | D | 目标 → 你 | 原路返回 |
