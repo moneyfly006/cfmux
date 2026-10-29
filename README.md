@@ -787,3 +787,28 @@ POST /accounts/{acc}/pages/projects/cfmux/domains  {name:"mux.moneyfly.club"}
 | `gh_repo` | `owner/repo`，如 `moneyfly006/cfmux` |
 | `gh_workflow` | 默认 `refresh-quality.yml` |
 | `gh_ref` | 默认 `main` |
+
+## 二十一、v2.9：订阅节点数修复验证 · 二维码本地生成
+
+### 最终实测
+```
+候选 436 → 通过 147 → 去重 39 → 输出 108 个节点
+格式：base64 31KB / clash 35KB / singbox 52KB / plain 23KB / json 22KB / qx 25KB / loon 21KB
+```
+
+### 二维码改为本地生成
+外部二维码服务（api.qrserver.com）在部分网络下会 404/超时，导致二维码空白。
+现在优先用 `qrcode-generator`（jsdelivr 1.4.4）在浏览器内生成 **内联 SVG**，无外部依赖；
+CDN 不可用时才回退到图片接口。实测：`#qr-local` 内为 `<svg>`，控制台 0 错误。
+
+### 部署前校验
+新增 `tools/check-dash.js`：渲染 DASHBOARD_HTML → 提取 `<script>` → `node --check`。
+这次靠它抓到并修复了两处模板转义错误（`copy('sl-'+i+'')`、多余花括号）。
+
+### 自定义域名（已上线并验证）
+```
+mux.moneyfly.club  CNAME → cfmux.pages.dev (proxied)
+https://mux.moneyfly.club/admin   → 200
+https://mux.moneyfly.club/panel   → 200
+https://mux.moneyfly.club/sub     → 200（limit=5 时返回 5 个节点）
+```

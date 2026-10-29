@@ -1168,7 +1168,19 @@ function renderSubs(){
     '<div style="margin-top:8px"><button class="btn alt" data-copy="sl-'+i+'" onclick="copyById(this)">复制</button> '+
     '<a class="btn alt" target="_blank" href="'+base+path+'" style="text-decoration:none">打开</a></div></div>'
   ).join('');
-  $('qr').innerHTML = '<img alt="subscription qr" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(base+'/sub') + '">';
+  const url = base + '/sub';
+  const box = $('qr');
+  box.innerHTML = '<div id="qr-local" style="width:200px;height:200px;background:#fff;border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:center"><style>#qr-local svg{width:100%;height:100%}</style></div>';
+  const fallback = () => { box.innerHTML = '<img alt="qr" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(url) + '">'; };
+  if (window.qrcode) {
+    try { const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr-local').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2 }); } catch (e) { fallback(); }
+  } else {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';
+    sc.onload = () => { try { const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr-local').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2 }); } catch (e) { fallback(); } };
+    sc.onerror = fallback;
+    document.head.appendChild(sc);
+  }
 }
 function renderEntries(){
   const e = EDIT.entries || [];
