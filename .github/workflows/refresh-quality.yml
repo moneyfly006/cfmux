@@ -18,7 +18,8 @@ jobs:
           TOKEN: ${{ secrets.CFMUX_REPORT_TOKEN }}
         run: |
           curl -sS --max-time 30 "$BASE/api/quality/entries" -H "x-report-token: $TOKEN" -o entries.json
-          node -e "const d=require('./entries.json');require('fs').writeFileSync('pref.txt', (d.preferred||[]).slice(0,40).join('\n'));console.log('entries',d.entries.length,'pref',Math.min(40,(d.preferred||[]).length))"
+          curl -sS --max-time 40 "$BASE/api/entries?limit=200" -o cands.json
+          node -e "const d=require('./entries.json');const c=require('./cands.json');const vals=Object.values(c.byColo||{}).flat();require('fs').writeFileSync('pref.txt', vals.slice(0,80).join('\n'));console.log('entries',d.entries.length,'candidates',vals.length)"
       - name: Measure
         run: node tools/quality.mjs --entries entries.json --preferred pref.txt --out quality.json --timeout 8000 --bytes 262144 --concurrency 6 || true
       - name: Report

@@ -132,6 +132,27 @@ async function geoOf(entry, ip) {
   return null;
 }
 
+// 隧道外批量解析出口 IP 的国家（ip-api batch，每次最多 100 个）
+async function batchGeo(ips) {
+  const out = {};
+  const list = [...new Set(ips.filter(Boolean))];
+  for (let i = 0; i < list.length; i += 100) {
+    const chunk = list.slice(i, i + 100);
+    try {
+      const r = await fetch('http://ip-api.com/batch?fields=status,country,countryCode,city,query', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(chunk.map((ip) => ({ query: ip }))),
+      });
+      const arr = await r.json();
+      if (Array.isArray(arr)) arr.forEach((x, idx) => {
+        if (x && x.status === 'success' && x.countryCode) out[chunk[idx]] = { cc: x.countryCode, country: x.country, city: x.city };
+      });
+    } catch (e) {}
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  return out;
+}
+
 function scoreOf(q) {
   if (!q.ok) return 0;
   const lat = q.lat || 9999, tput = q.tput || 0, jit = q.jitter || 0;
@@ -199,6 +220,15 @@ const KEEP_MS = +(args.keepDays || 7) * 86400000;
 let merged = 0;
 for (const [k, v] of Object.entries(PREV)) {
   if (!out[k] && v && v.ts && (Date.now() - v.ts) < KEEP_MS) { out[k] = v; merged++; }
+}
+// 补齐缺失的国家：先用隧道内 geo 的结果，缺失的用出口 IP 批量解析
+const missing = Object.values(out).filter((v) => v.ok && !v.cc && v.exitIp);
+if (missing.length) {
+  const geo = await batchGeo(missing.map((v) => v.exitIp));
+  for (const v of missing) {
+    const g = geo[v.exitIp];
+    if (g) { v.cc = g.cc; v.country = g.country; v.city = g.city; }
+  }
 }
 writeFileSync(OUT, JSON.stringify(out, null, 1));
 const okN = Object.values(out).filter((x) => x.ok).length;
