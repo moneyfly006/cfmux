@@ -149,6 +149,8 @@ export default {
     if (url.pathname === '/api/traffic') return apiTraffic(request, env, url);
     if (url.pathname === '/api/stats') return apiStats(request, env, url);
     if (url.pathname === '/api/quality/report') return apiQualityReport(request, env, url);
+    if (url.pathname === '/api/shortlink') return apiShortLink(request, env, url);
+    if (url.pathname.startsWith('/s/')) return shortLinkRedirect(request, env, url);
     if (url.pathname === '/api/quality/entries') return apiQualityEntries(request, env, url);
     if (url.pathname === '/admin') return adminPage(request, env, url);
     if (url.pathname === '/admin/login') return adminLogin(request, env, url);
@@ -455,8 +457,13 @@ async function buildSubscription(request, env, url) {
   const entries = await getEntries(env);
   const quality = await getQuality(env);
   const th = await getThreshold(env);
-  let colosMap = {};
-  try { if (env.KV) colosMap = JSON.parse((await env.KV.get('colos')) || '{}'); } catch {}
+  let colosMap = {}, banned = {};
+  try {
+    if (env.KV) {
+      colosMap = JSON.parse((await env.KV.get('colos')) || '{}');
+      banned = JSON.parse((await env.KV.get('banned')) || '{}');
+    }
+  } catch {}
   const hostOverride = url.searchParams.get('host') || '';
 
   // 组装候选：entry × preferred，质量优先
@@ -473,6 +480,7 @@ async function buildSubscription(request, env, url) {
     const ePath = (kc && String(kc.d || '').trim()) ? String(kc.d).trim() : wsPath;
     if (!vlessOn && !trojanOn) continue;   // 两种协议都关 → 跳过该入口
     for (const c of cand) {
+      if (banned[c.value] && banned[c.value].until > Date.now()) continue;   // 已被淘汰（封禁中）
       const q = quality[`${host}|${c.value}`];
       // 有质量数据 → 必须达标；无质量数据 → 在 requireQuality=false 时才放行
       let stale = false;
@@ -502,7 +510,7 @@ async function buildSubscription(request, env, url) {
         score: q ? (stale ? Math.max(0, (q.score ?? 0) - 15) : q.score) : null,
         tpass: trojanOn ? (kc.tp || '').trim() : '',
         value: c.value, uuid, host,
-        name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}${trojanOn && !vlessOn ? '-T' : ''}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
+        name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}[${(trojanOn && !vlessOn) ? 'T' : 'V'}${kc && kc.ech === 'yes' ? '+E' : ''}]${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
         rawScore: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
         cc: q ? q.cc : null, country: q ? q.country : null, exitIp: q ? q.exitIp : null,
         dedupKey: (q && (q.exitIp || q.resolved)) || c.value,
@@ -747,6 +755,25 @@ async function apiQualityEntries(request, env, url) {
   return json({ ok: true, entries: entries.map((e) => ({ name: e.name, host: e.host, uuid: e.uuid, path: e.path || '/' })), preferred });
 }
 
+async function apiShortLink(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  if (!env.KV) return json({ ok: false, msg: 'KV 未绑定' }, 503);
+  const body = await request.json().catch(() => ({}));
+  const query = String(body.query || '').replace(/^\?/, '');
+  if (!query) return json({ ok: false, msg: '缺少 query' }, 400);
+  const tok = [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(36).padStart(2, '0')).join('').slice(0, 10);
+  await env.KV.put('short:' + tok, JSON.stringify({ query, ts: Date.now(), note: String(body.note || '').slice(0, 60) }));
+  return json({ ok: true, path: '/s/' + tok, url: `https://${url.host}/s/${tok}`, query });
+}
+
+async function shortLinkRedirect(request, env, url) {
+  const tok = url.pathname.slice(3);
+  let rec = null;
+  try { if (env.KV) rec = JSON.parse((await env.KV.get('short:' + tok)) || 'null'); } catch {}
+  if (!rec) return new Response('短链不存在或已失效', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  return Response.redirect(`https://${url.host}/sub?${rec.query}`, 302);
+}
+
 async function apiQualityReport(request, env, url) {
   if (!reportOk(request, env)) return json({ ok: false, msg: '上报口令无效' }, 401);
   if (!env.KV) return json({ ok: false, msg: 'KV 未绑定' }, 503);
@@ -764,7 +791,7 @@ async function apiQualityReport(request, env, url) {
   await env.KV.put('quality', JSON.stringify(cur));
 
   // 自动晋升：把本轮高分入口写入 preferred（去重、上限 200），实现“自动加入优选”
-  let promoted = 0;
+  let promoted = 0, pruned = 0;
   try {
     const st = await getSettings(env);
     if (st.autoPromote !== false) {
@@ -780,12 +807,58 @@ async function apiQualityReport(request, env, url) {
       const set = new Set(pref.map((x) => (typeof x === 'string' ? x : x.ip)));
       for (const v of top) if (!set.has(v)) { pref.push(v); set.add(v); promoted++; }
       if (promoted) await env.KV.put('preferred', JSON.stringify(pref.slice(-200)));
+
+      // 自动淘汰（保守版）：候选在本轮取「各数据面最低分」，落在底部 25% 才记一次
+      // 连续 pruneStrikes 轮（默认 3）且可用候选数 > pruneFloor（默认 60）才移出 preferred
+      const alive = Object.entries(cur).filter(([, v]) => v && v.ok && !v.cooldownUntil);
+      const byVal = new Map();
+      for (const [k, v] of alive) {
+        const val = k.split('|')[1]; if (!val) continue;
+        const sc = v.score ?? 0;
+        byVal.set(val, Math.min(byVal.has(val) ? byVal.get(val) : 1e9, sc));
+      }
+      const vals = [...byVal.entries()].sort((a, b) => a[1] - b[1]);
+      const median = vals.length ? vals[Math.floor(vals.length / 2)][1] : 0;
+      const bottomN = Math.max(1, Math.floor(vals.length * 0.25));
+      const bottom = new Set(vals.slice(0, bottomN).map(([v]) => v));
+      let strikes = {};
+      try { strikes = JSON.parse((await env.KV.get('strikes')) || '{}'); } catch {}
+      for (const [v] of vals) strikes[v] = bottom.has(v) ? (strikes[v] || 0) + 1 : 0;
+      const needStrikes = st.pruneStrikes ?? 3;
+      const floor = st.pruneFloor ?? 60;
+      const eligible = vals.length > floor;
+      const drop = new Set(eligible ? vals.filter(([v]) => (strikes[v] || 0) >= needStrikes).map(([v]) => v) : []);
+      if (drop.size) {
+        let p2 = [];
+        try { p2 = JSON.parse((await env.KV.get('preferred')) || '[]'); } catch {}
+        const before = p2.length;
+        p2 = p2.filter((x) => !drop.has(typeof x === 'string' ? x : x.ip));
+        await env.KV.put('preferred', JSON.stringify(p2));
+        let ban = {};
+        try { ban = JSON.parse((await env.KV.get('banned')) || '{}'); } catch {}
+        const banHours = st.banHours ?? 168;
+        for (const v of drop) { ban[v] = { until: Date.now() + banHours * 3600000, ts: Date.now() }; delete strikes[v]; }
+        await env.KV.put('banned', JSON.stringify(ban));
+        pruned = before - p2.length;
+      }
+      await env.KV.put('strikes', JSON.stringify(strikes));
+
+      // 解封：本轮分数回到中位数以上且不在底部 25%，解除封禁
+      let ban2 = {};
+      try { ban2 = JSON.parse((await env.KV.get('banned')) || '{}'); } catch {}
+      let unbanned = 0;
+      for (const v of Object.keys(ban2)) {
+        if (bottom.has(v)) continue;
+        const sc = byVal.get(v);
+        if (sc !== undefined && sc >= median) { delete ban2[v]; unbanned++; }
+      }
+      if (unbanned) await env.KV.put('banned', JSON.stringify(ban2));
     }
   } catch {}
 
   // 记录上报来源与时间
   try { await env.KV.put('report_meta', JSON.stringify({ ts: Date.now(), source: String(body.source || 'ci').slice(0, 40), count: n })); } catch {}
-  return json({ ok: true, merged: n, total: Object.keys(cur).length, promoted });
+  return json({ ok: true, merged: n, total: Object.keys(cur).length, promoted, pruned, unbanned: typeof unbanned !== 'undefined' ? unbanned : 0 });
 }
 
 async function apiStats(request, env, url) {
@@ -1094,6 +1167,13 @@ aside h1{font-size:0}}
   <h2>订阅</h2>
   <div class="toolbar"><span class="dim">点“复制”后粘贴到客户端；带 ?nocache=1 可绕过 60 秒缓存</span></div>
   <div class="grid2" id="sub-list"></div>
+  <div class="card" style="margin-top:12px"><div class="k">订阅短链（可随时失效）</div>
+    <div class="toolbar" style="margin-top:8px">
+      <input id="sl-query" placeholder="参数，如 target=clash&amp;limit=50&amp;cc=SG">
+      <button class="btn" onclick="makeShort(this)">生成短链</button>
+    </div>
+    <div id="sl-out" class="dim" style="font-size:12px;margin-top:8px">生成后可分发，删除对应 KV 键即失效</div>
+  </div>
   <div class="card" style="margin-top:12px"><div class="k">二维码（手机扫一扫）</div><div id="qr" style="margin-top:10px"></div>
     <div class="dim" style="font-size:11px;margin-top:6px">通用订阅，客户端自动识别</div></div>
 </section>
@@ -1167,6 +1247,11 @@ aside h1{font-size:0}}
         <label class="dim" style="font-size:12px">数据有效期(小时) maxAgeHours<input id="f-maxAgeHours" type="number"></label>
         <label class="dim" style="font-size:12px">每入口取几个 perEntry<input id="f-perEntry" type="number"></label>
         <label class="dim" style="font-size:12px">必须有实测 requireQuality<select id="f-requireQuality"><option>true</option><option>false</option></select></label>
+        <label class="dim" style="font-size:12px">陈旧数据保留天数 softExpireDays<input id="f-softExpireDays" type="number"></label>
+        <label class="dim" style="font-size:12px">淘汰所需轮次 pruneStrikes<input id="f-pruneStrikes" type="number"></label>
+        <label class="dim" style="font-size:12px">淘汰下限 pruneFloor（少于此数不淘汰）<input id="f-pruneFloor" type="number"></label>
+        <label class="dim" style="font-size:12px">淘汰封禁小时 banHours<input id="f-banHours" type="number"></label>
+        <label class="dim" style="font-size:12px">自动晋升分数 promoteMinScore<input id="f-promoteMinScore" type="number"></label>
         <label class="dim" style="font-size:12px">默认节点数 limit<input id="f-limit" type="number"></label>
       </div>
     </div>
@@ -1189,6 +1274,17 @@ function busy(btn, label, fn){
   return Promise.resolve().then(fn).finally(()=>{ if (btn) { btn.disabled=false; btn.textContent = old; } });
 }
 function copyById(el){ copy(el.dataset.copy); }
+async function makeShort(btn){
+  const q = ($('sl-query').value || '').trim();
+  return busy(btn, '生成中…', async () => {
+    const d = await post('/api/shortlink', { query: q || 'target=base64' });
+    if (!d.ok) { toast('生成失败：' + (d.msg||''), true); return; }
+    $('sl-out').innerHTML = '<code style="display:block;padding:8px;margin-bottom:8px">' + d.url + '</code>'
+      + '<button class="btn alt" id="sl-copy">复制短链</button>';
+    $('sl-copy').onclick = function(){ copyText(d.url); toast('短链已复制'); };
+    toast('短链已生成');
+  });
+}
 function copy(id){
   const txt = $(id).textContent;
   const done = () => toast('已复制到剪贴板');
@@ -1355,6 +1451,9 @@ function fillSettings(){
   $('f-minScore').value = s.minScore ?? 0; $('f-minTput').value = s.minTput ?? 0;
   $('f-maxAgeHours').value = s.maxAgeHours ?? 168; $('f-perEntry').value = s.perEntry ?? 0;
   $('f-requireQuality').value = (s.requireQuality===false)?'false':'true'; $('f-limit').value = s.limit ?? 0;
+  $('f-softExpireDays').value = s.softExpireDays ?? 30; $('f-pruneStrikes').value = s.pruneStrikes ?? 4;
+  $('f-pruneFloor').value = s.pruneFloor ?? 120; $('f-banHours').value = s.banHours ?? 72;
+  $('f-promoteMinScore').value = s.promoteMinScore ?? 55;
   $('f-sources').value = s.sources||''; $('f-colos').value = JSON.stringify(STATE.colos||{}, null, 1);
 }
 async function post(url, body){ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
@@ -1362,7 +1461,10 @@ async function saveSettings(btn){
   return busy(btn, '保存中…', async () => {
     const body = { minScore:+$('f-minScore').value, minTput:+$('f-minTput').value, maxAgeHours:+$('f-maxAgeHours').value,
       perEntry:+$('f-perEntry').value, requireQuality:$('f-requireQuality').value, limit:+$('f-limit').value,
-      sources:$('f-sources').value, colos:$('f-colos').value };
+      sources:$('f-sources').value, colos:$('f-colos').value,
+      softExpireDays:+$('f-softExpireDays').value, pruneStrikes:+$('f-pruneStrikes').value,
+      pruneFloor:+$('f-pruneFloor').value, banHours:+$('f-banHours').value,
+      promoteMinScore:+$('f-promoteMinScore').value };
     const el = $('st-settings'); status(el, '保存中…', true);
     const d = await post('/admin/save', body);
     if (d.ok) { status(el, '已保存 ' + new Date().toLocaleTimeString(), true); toast('设置已保存并生效'); await load(); }
@@ -1577,6 +1679,12 @@ async function adminSave(request, env, url) {
     if (body.minScore !== undefined) st.minScore = Math.max(0, Math.min(+body.minScore || 0, 100));
     if (body.minTput !== undefined) st.minTput = Math.max(0, +body.minTput || 0);
     if (body.maxAgeHours !== undefined) st.maxAgeHours = Math.max(0, +body.maxAgeHours || 0);
+    if (body.softExpireDays !== undefined) st.softExpireDays = Math.max(0, +body.softExpireDays || 0);
+    if (body.pruneStrikes !== undefined) st.pruneStrikes = Math.max(1, +body.pruneStrikes || 4);
+    if (body.pruneFloor !== undefined) st.pruneFloor = Math.max(0, +body.pruneFloor || 120);
+    if (body.banHours !== undefined) st.banHours = Math.max(1, +body.banHours || 72);
+    if (body.promoteMinScore !== undefined) st.promoteMinScore = Math.max(0, Math.min(+body.promoteMinScore || 55, 100));
+    if (body.autoPromote !== undefined) st.autoPromote = String(body.autoPromote).toLowerCase() !== 'false';
     if (body.requireQuality !== undefined) st.requireQuality = String(body.requireQuality).toLowerCase() !== 'false';
     if (body.colos !== undefined) {
       const obj = JSON.parse(body.colos || '{}');
