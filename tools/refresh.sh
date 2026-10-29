@@ -4,6 +4,9 @@
 # 依赖: ~/cf-deploy/.cf.env (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# launchd/cron 的 PATH 通常不含 Homebrew，这里显式补上
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+command -v node >/dev/null || { echo "找不到 node，请检查 PATH"; exit 127; }
 set -a
 . "${ENV_FILE:-$HOME/cf-deploy/.cf.env}"
 [ -f "$HOME/cfmux/.refresh.env" ] && . "$HOME/cfmux/.refresh.env"

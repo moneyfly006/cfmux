@@ -507,3 +507,73 @@ ip-api.com/json → ipinfo.io/json → ip.3322.net（仅返回 IP）
 | IP 重复 | 多个域名解析到同一 IP | 按真实出口 IP 去重，保留评分最高 |
 | 订阅节点少 | 默认 limit=12 + perEntry=2 | 默认 `limit=0` 全部、`perEntry=0` 不限 |
 | 功能难理解 | 无说明 | `/panel` 使用说明 + 参数表 + FAQ |
+
+## 十六、工作原理：设置怎么生效？节点怎么抓、怎么测？
+
+### 1. 三条链路
+
+```
+① 抓取（Worker 内，请求时）
+   外部优选源(bestcf cf_domains.txt 426 条) ──┐
+   KV: preferred（实测排序的 IP）      ──┤→ 合并去重 → 候选表
+                                          │   （Cache API 缓存 10 分钟）
+
+② 测速（你的 Mac，launchd 每 2 小时）
+   tools/quality.mjs
+     对每个「数据面 × 候选」：
+       TLS+WS 握手 → VLESS 请求 204 × 3 次（延迟/抖动）
+       → 隧道下载 256KB（吞吐 KB/s）
+       → 经隧道查 geo（真实出口国家）
+       → 评分 + 分级 → 写 KV: quality
+     （Worker 本身不测速，因为它看不到你到边缘的链路）
+
+③ 出订阅（Worker 内，请求时）
+   KV: quality + settings → 过滤(门槛/时效/熔断/去重) → 排序 → 生成订阅
+     （响应缓存 60s，?nocache=1 立即生效）
+```
+
+### 2. 后台每个设置的生效方式（已实测）
+
+| 设置 | 作用点 | 实测效果（同一时刻） |
+| --- | --- | --- |
+| `minScore` | ③ 过滤 | 0→**157** 个；60→**74** 个 |
+| `minTput` | ③ 过滤 | 0→157；80→**119** 个 |
+| `perEntry` | ③ 每入口取几个 | 0→157；1→**2** 个 |
+| `limit` | ③ 输出上限 | 0→157；5→**5** 个 |
+| `maxAgeHours` | ③ 数据时效 | 168→157；1（数据新）→157 |
+| `requireQuality` | ③ 是否放行无实测 | true→157；false→**300**（上限）|
+| `sources` | ① 抓取源 | 改后下次请求生效（10 分钟缓存）|
+| `entries` | ①③ 数据面列表 | 改后立即改变节点前缀与数量 |
+| `colos` | ③ 国家名回退 | 无 geo 时用 colo 映射国家 |
+
+> 所有设置都写在 KV 的 `settings` 键；`/sub` 每次请求都会读取，
+> 只有**响应**有 60 秒缓存（`?nocache=1` 可跳过）。
+
+### 3. 节点抓取规则
+
+- **外部优选源**：默认 `https://bestcf.fxxk.dedyn.io/cf_domains.txt`（426 个优选域名），
+  可在后台 `sources` 追加任意「一行一个」的地址
+- **KV `preferred`**：实测排序后的 IP 列表
+- **合并去重**：同一值只保留一次；输出时再按**真实出口 IP** 去重
+- 只有「数据面 × 候选」在 `quality` 表里 **ok=true 且未过期** 的才会进订阅
+
+### 4. 测速评分
+
+```
+score = 延迟分×0.5 + 吞吐分×0.35 + 抖动分×0.15
+延迟分 = max(0, 100 - lat/60)   吞吐分 = min(100, KBps/2)   抖动分 = max(0, 100 - jitter/5)
+分级：S≥70 / A≥45 / B≥20 / C<20
+```
+连续失败 3 次 → 自动熔断 2 小时（`cooldownUntil`），订阅自动剔除。
+
+### 5. 定时任务（已修复）
+launchd 的 PATH 不含 Homebrew，之前报 `node: command not found`（任务实际没跑）。
+已修复：`refresh.sh` 显式补 `/opt/homebrew/bin`，并在找不到 node 时明确报错退出。
+
+```bash
+launchctl list | grep cfmux        # 查看状态（第二列 0 = 上次成功）
+tail -f ~/cfmux/data/refresh.log   # 查看每次刷新日志
+```
+
+新增合并逻辑：每轮只测 45 个候选 × 3 入口，**不会冲掉**之前的 218 条质量数据
+（未测到且 7 天内的保留）。

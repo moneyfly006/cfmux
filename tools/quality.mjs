@@ -192,8 +192,15 @@ await Promise.all(Array.from({ length: CONC }, async () => {
   while (queue.length) { const [e, ip] = queue.shift(); try { await measureOne(e, ip); } catch (err) { console.log('ERR', e.host, ip, String(err).slice(0, 60)); } }
 }));
 
+// 合并上次结果：本轮未测到且未过期（7 天）的条目保留，避免小批量刷新冲掉大数据集
+const KEEP_MS = +(args.keepDays || 7) * 86400000;
+let merged = 0;
+for (const [k, v] of Object.entries(PREV)) {
+  if (!out[k] && v && v.ts && (Date.now() - v.ts) < KEEP_MS) { out[k] = v; merged++; }
+}
 writeFileSync(OUT, JSON.stringify(out, null, 1));
 const okN = Object.values(out).filter((x) => x.ok).length;
 const ccs = {};
 for (const v of Object.values(out)) if (v.ok && v.cc) ccs[v.cc] = (ccs[v.cc] || 0) + 1;
-console.log(`\n可用 ${okN}/${Object.keys(out).length}，国家分布 ${JSON.stringify(ccs)}，已写入 ${OUT}`);
+console.log(`\n本轮测 ${okN} 可用；合并保留 ${merged} 条旧数据；总计 ${Object.keys(out).length} 条 → ${OUT}`);
+console.log(`国家分布 ${JSON.stringify(ccs)}`);

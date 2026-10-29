@@ -1,1 +1,33 @@
 ./tools/refresh.sh: line 8: KV_ID: 请设置 KV_ID（cfmux 项目的 KV 命名空间 id）
+[*] 实测清单：13 条（IP + 域名）
+     103.21.244.1
+     104.16.3.1
+     104.17.2.1
+     104.25.1.1
+     188.114.97.1
+     cdns.doon.eu.org
+     cf.0sm.com
+     cf2.996616.xyz
+     cloudflare-ip.mofashi.ltd
+     skk.moe
+     time.is
+     visa.com
+     www.shopify.com
+./tools/refresh.sh: line 30: node: command not found
+[*] 实测清单：13 条（IP + 域名）
+     103.21.244.1
+     104.16.3.1
+     104.17.2.1
+     104.25.1.1
+     188.114.97.1
+     cdns.doon.eu.org
+     cf.0sm.com
+     cf2.996616.xyz
+     cloudflare-ip.mofashi.ltd
+     skk.moe
+     time.is
+     visa.com
+     www.shopify.com
+✅ mux-core @ 104.25.1.1                 lat= 2161 jit= 984 tput=  127KB/s score= 54.22 A NL/Amsterdam 
+✅ mux-core @ 104.17.2.1                 lat= 2434 jit=2257 tput=   98KB/s score= 46.87 A US/East Los Angeles 
+./tools/refresh.sh: line 33: 10680 Terminated: 15          node tools/quality.mjs --entries "$ENT" --preferred "$LIST" --out "$OUT" --timeout 9000 --bytes 262144
