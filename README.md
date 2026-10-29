@@ -187,3 +187,37 @@ Clash 输出自动分组 `自动优选(url-test)` + `故障切换(fallback)`。
 ### 部署步骤（完整）
 见本文件「四、部署」+ 上面两节：建 Pages → 设 `uuid`/`KV`/`sources` → 部署 →
 跑 `measure.mjs` 写 `preferred` → 跑 `colos.mjs` 写 `colos` → 访问 `/panel` 验证。
+
+## 十、后台管理（v1.2）
+
+### 地址与登录
+- 后台：`https://<你的域名>/admin`
+- 未设 `admin_password` 时后台不可用（页面会提示）；设置后为密码登录，
+  cookie = `SHA-256("cfmux|" + 密码)`，HttpOnly + Secure + SameSite=Lax，7 天有效。
+- 前端状态页（无需登录）：`/panel`
+
+### 后台能做什么
+| 区块 | 说明 |
+| --- | --- |
+| 订阅 | 三种格式链接一键打开 |
+| 基本设置 | 优选源（`sources`，逗号分隔 URL）、默认节点数（1–300） |
+| 优选表 `preferred` | KV 里的实测排序（JSON 数组），可手工编辑/粘贴 |
+| 区域映射 `colos` | `ip/域名 → colo` 映射，供 `?region=` 过滤 |
+| 保存 | 写入 KV，订阅**立即**生效（无需重新部署） |
+
+### 设置/修改密码
+```bash
+# Cloudflare 控制台 → Workers 和 Pages → cfmux → 设置 → 变量和机密
+# 添加或修改： admin_password = <你的新密码>
+# 变量改动后需要「重新部署」才生效（页面上点 Retry deployment 或重新 push 一次）
+```
+
+### 已验证行为
+```
+GET  /admin           未登录 → 200 登录页
+POST /admin/login     错误密码 → 401
+POST /admin/login     正确密码 → 302 + Set-Cookie
+GET  /admin           带 cookie → 200 控制台
+POST /admin/save      → {"ok":true}，/sub 立即按新 limit 输出
+POST /admin/save      未登录 → 401 {"ok":false,"msg":"未登录"}
+```

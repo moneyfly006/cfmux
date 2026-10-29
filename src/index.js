@@ -110,6 +110,10 @@ export default {
     if (url.pathname === '/sub') return subscription(request, env, url);
     if (url.pathname === '/panel') return panelPage(request, env, url);
     if (url.pathname === '/api/entries') return apiEntries(request, env, url);
+    if (url.pathname === '/admin') return adminPage(request, env, url);
+    if (url.pathname === '/admin/login') return adminLogin(request, env, url);
+    if (url.pathname === '/admin/logout') return adminLogout(request, env, url);
+    if (url.pathname === '/admin/save') return adminSave(request, env, url);
 
     // 代理入口：任意路径都可，按需校验自定义路径
     if (!uuidHex || uuidHex.length !== 32) return new Response('cfmux: uuid not configured', { status: 503 });
@@ -246,8 +250,9 @@ const REGION_NAMES = {
 
 async function loadSources(env, request) {
   // 合并：KV 实测优选(IP) + 外部优选域名/IP 列表（带 10 分钟边缘缓存）
+  const st = await getSettings(env);
   const urls = [].concat(
-    (env.sources || '').split(',').map((s) => s.trim()).filter(Boolean),
+    (st.sources || env.sources || '').split(',').map((x) => x.trim()).filter(Boolean),
     DEFAULT_SOURCES
   );
   const out = [];
@@ -273,7 +278,8 @@ async function loadSources(env, request) {
 }
 
 async function resolveEntries(request, env, url) {
-  const limit = Math.min(+(url.searchParams.get('limit') || 12), 300);
+  const st = await getSettings(env);
+  const limit = Math.min(+(url.searchParams.get('limit') || st.limit || 12), 300);
   const wantRegion = (url.searchParams.get('region') || '').trim().toUpperCase();
   const like = (url.searchParams.get('like') || '').trim();   // 域名/IP 关键字过滤
 
@@ -435,4 +441,154 @@ async function diag(){ try{ const d=await (await fetch('/diag')).json();
 load(); diag();
 </script></body></html>`;
   return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+}
+
+// ---------- 后台管理 ----------
+const ADMIN_COOKIE = 'cfmux_admin';
+const SEVEN_DAYS = 7 * 24 * 3600;
+
+async function sha256hex(str) {
+  const buf = await crypto.subtle.digest('SHA-256', enc.encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function getCookie(req, name) {
+  const raw = req.headers.get('Cookie') || '';
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    if (part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return '';
+}
+async function adminToken(env) {
+  if (!env.admin_password) return '';
+  return sha256hex('cfmux|' + env.admin_password);
+}
+async function isAdmin(req, env) {
+  const want = await adminToken(env);
+  if (!want) return false;
+  const got = getCookie(req, ADMIN_COOKIE);
+  if (!got || got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ got.charCodeAt(i);
+  return diff === 0;
+}
+async function getSettings(env) {
+  const base = { sources: '', limit: 12, host: '' };
+  try {
+    if (env.KV && env.KV.get) {
+      const raw = await env.KV.get('settings');
+      if (raw) Object.assign(base, JSON.parse(raw));
+    }
+  } catch {}
+  return base;
+}
+
+function loginHtml(needSetup) {
+  const msg = needSetup
+    ? `<div class="warn">⚠️ 未设置 <code>admin_password</code> 环境变量，后台不可用。<br>请在 Cloudflare 控制台 → Pages 项目 → 设置 → 变量 中添加 <code>admin_password</code>，然后重新部署。</div>`
+    : '';
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cfmux 后台登录</title><style>
+body{margin:0;background:#0b1020;color:#e6edf7;font:14px/1.6 -apple-system,"PingFang SC",sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.box{background:#141b2f;border:1px solid #22304d;border-radius:14px;padding:28px;width:320px}
+h1{font-size:17px;margin:0 0 18px}input{width:100%;background:#0f1526;border:1px solid #22304d;color:#e6edf7;border-radius:8px;padding:10px;font-size:14px;box-sizing:border-box}
+button{width:100%;margin-top:12px;background:#1d4ed8;border:0;color:#fff;border-radius:8px;padding:10px;font-size:14px;cursor:pointer}
+.warn{background:#3a2a12;border:1px solid #6b4a14;color:#fbbf24;border-radius:8px;padding:10px;font-size:12px;margin-bottom:14px}
+code{background:#0f1526;padding:1px 4px;border-radius:4px}</style></head><body><div class="box"><h1>cfmux 后台</h1>${msg}
+<form method="POST" action="/admin/login"><input type="password" name="password" placeholder="管理员密码" autofocus><button>登录</button></form>
+</div></body></html>`;
+}
+
+async function adminPage(request, env, url) {
+  if (!env.admin_password) return new Response(loginHtml(true), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+  if (!(await isAdmin(request, env))) return new Response(loginHtml(false), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+
+  const st = await getSettings(env);
+  let preferred = '[]', colos = '{}';
+  try { if (env.KV) { preferred = (await env.KV.get('preferred')) || '[]'; colos = (await env.KV.get('colos')) || '{}'; } } catch {}
+  const base = `https://${url.host}`;
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cfmux 后台</title><style>
+body{margin:0;background:#0b1020;color:#e6edf7;font:14px/1.6 -apple-system,"PingFang SC",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:22px}h1{font-size:18px;margin:0 0 14px}
+.card{background:#141b2f;border:1px solid #22304d;border-radius:12px;padding:16px;margin-bottom:14px}
+.card h2{font-size:13px;color:#8b9bb4;margin:0 0 10px;letter-spacing:.5px}
+textarea,input{width:100%;box-sizing:border-box;background:#0f1526;border:1px solid #22304d;color:#e6edf7;border-radius:8px;padding:9px;font:12px/1.5 ui-monospace,Menlo,monospace}
+textarea{min-height:110px;resize:vertical}
+button{background:#1d4ed8;border:0;color:#fff;border-radius:8px;padding:9px 16px;cursor:pointer;font-size:13px}
+button.alt{background:#1f2a44}a{color:#63e2b7}code{background:#0f1526;padding:1px 5px;border-radius:4px;font-size:12px}
+.row{display:flex;gap:10px;align-items:center;margin-bottom:8px}.row label{width:110px;color:#8b9bb4;font-size:12px}
+#msg{margin-top:10px;font-size:13px}
+</style></head><body><div class="wrap">
+<h1>cfmux 后台 <span style="font-size:12px;color:#8b9bb4">已登录</span></h1>
+<div class="card"><h2>订阅</h2>
+<div><code>${base}/sub</code> · <code>${base}/sub?target=clash</code> · <code>${base}/sub?target=singbox</code></div>
+<div style="margin-top:6px;font-size:12px;color:#8b9bb4">front: <a href="/panel">/panel</a> · <a href="/diag">/diag</a> · <a href="/admin/logout">退出登录</a></div>
+</div>
+<form id="f">
+<div class="card"><h2>基本设置</h2>
+<div class="row"><label>优选源(sources)</label><input name="sources" value="${esc(st.sources)}" placeholder="逗号分隔，留空则用内置 BestCF"></div>
+<div class="row"><label>默认节点数</label><input name="limit" value="${esc(st.limit)}" placeholder="12"></div>
+</div>
+<div class="card"><h2>优选表 preferred（JSON 数组，按序输出）</h2><textarea name="preferred">${esc(preferred)}</textarea></div>
+<div class="card"><h2>区域映射 colos（JSON 对象 ip→colo）</h2><textarea name="colos">${esc(colos)}</textarea></div>
+<div><button type="submit">保存到 KV</button> <span id="msg"></span></div>
+</form>
+</div><script>
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = { sources: fd.get('sources'), limit: fd.get('limit'), preferred: fd.get('preferred'), colos: fd.get('colos') };
+  const r = await fetch('/admin/save', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const d = await r.json().catch(()=>({}));
+  document.getElementById('msg').textContent = d.ok ? '✅ 已保存' : ('❌ ' + (d.msg || '保存失败'));
+});
+</script></body></html>`;
+  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+}
+
+async function adminLogin(request, env) {
+  if (!env.admin_password) return new Response(loginHtml(true), { status: 503, headers: { 'content-type': 'text/html; charset=utf-8' } });
+  const form = new URLSearchParams(await request.text());
+  const pass = form.get('password') || '';
+  if (pass !== env.admin_password) {
+    return new Response(loginHtml(false), { status: 401, headers: { 'content-type': 'text/html; charset=utf-8' } });
+  }
+  const tok = await adminToken(env);
+  return new Response(null, {
+    status: 302,
+    headers: { Location: '/admin', 'Set-Cookie': `${ADMIN_COOKIE}=${tok}; Path=/; Max-Age=${SEVEN_DAYS}; HttpOnly; Secure; SameSite=Lax` },
+  });
+}
+
+async function adminLogout(request, env) {
+  return new Response(null, { status: 302, headers: { Location: '/admin', 'Set-Cookie': `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` } });
+}
+
+async function adminSave(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  let body;
+  try { body = await request.json(); } catch { return json({ ok: false, msg: 'bad json' }, 400); }
+  if (!env.KV || typeof env.KV.put !== 'function') return json({ ok: false, msg: 'KV 未绑定，无法保存' }, 503);
+  try {
+    const st = await getSettings(env);
+    if (body.sources !== undefined) st.sources = String(body.sources || '').trim();
+    if (body.limit !== undefined) st.limit = Math.max(1, Math.min(+body.limit || 12, 300));
+    await env.KV.put('settings', JSON.stringify(st));
+    if (body.preferred !== undefined) {
+      const arr = JSON.parse(body.preferred || '[]');
+      if (!Array.isArray(arr)) throw new Error('preferred 必须是数组');
+      await env.KV.put('preferred', JSON.stringify(arr));
+    }
+    if (body.colos !== undefined) {
+      const obj = JSON.parse(body.colos || '{}');
+      if (typeof obj !== 'object' || Array.isArray(obj)) throw new Error('colos 必须是对象');
+      await env.KV.put('colos', JSON.stringify(obj));
+    }
+    return json({ ok: true });
+  } catch (e) {
+    return json({ ok: false, msg: String(e).slice(0, 120) }, 400);
+  }
 }
