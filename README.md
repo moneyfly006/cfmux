@@ -735,3 +735,55 @@ POST /accounts/{acc}/pages/projects/cfmux/domains  {name:"mux.moneyfly.club"}
 
 配好后访问 `https://mux.moneyfly.club/admin` 即可。
 （若愿意给一个带 `Zone:DNS:Edit` 的 Token，我可以直接帮你建记录并验证。）
+
+## 二十、v2.8：节点数修复 · 全格式订阅 · 自定义域名上线
+
+### 1. 「达标很多但订阅很少」的根因（已修）
+两个真 bug：
+
+| 问题 | 原因 | 修复 |
+| --- | --- | --- |
+| 订阅只出 3 个节点 | KV 里 `perEntry=1`（早期测试残留），每个数据面只取 1 个 | 重置为 0（每入口全量） |
+| `?limit=50` 反而更少 | `limit` 被误用于**裁剪候选**，候选少了质量过滤后自然更少 | `limit` 只控制输出数量，候选改由 `cand` 控制 |
+
+修复后实测：**108 个节点**（pass 147 → 去重 39 → 输出 108）。
+
+### 2. 订阅格式补全（7 种）
+
+| 格式 | 参数 | 说明 |
+| --- | --- | --- |
+| Base64 通用 | 默认 | V2Ray / Shadowrocket / v2rayN |
+| Clash / Meta / Stash / Mihomo | `target=clash` | 含 url-test + fallback 组 |
+| sing-box | `target=singbox` | urltest 自动测速 |
+| 原始 URI 列表 | `target=plain` | 纯文本，便于二次处理 |
+| JSON | `target=json` | 自建客户端/脚本用 |
+| Quantumult X | `target=qx` | `vless=...obfs=wss` 行 |
+| Loon | `target=loon` | `name = VLESS,...` 行 |
+| Surge | `target=surge` | **不支持 VLESS**，返回说明（需开启 Trojan-WS） |
+
+实测各格式节点数一致：108 个（base64 31KB / clash 35KB / singbox 52KB / qx 24KB / loon 21KB）。
+
+### 3. 自定义域名（已上线）
+- 通过 Pages API 添加 `mux.moneyfly.club`
+- DNS CNAME：`mux` → `cfmux.pages.dev`（proxied）
+- 验证：`https://mux.moneyfly.club/admin` / `/panel` / `/sub` 均 200
+
+> Pages 控制台状态可能短暂显示 `pending`，实际已可访问（证书签发有延迟）。
+
+### 4. 测速原理与 Token（回答）
+- **测速在哪里跑**：不在 Worker 里，而是在**你的 Mac**（launchd 每 2 小时）或 GitHub Actions。
+  Worker 看不到「你的网络 → Cloudflare 边缘」这一段链路，只有客户端侧才能测准。
+- **测什么**：对「数据面 × 候选入口」逐个做 TLS+WS 握手 → VLESS 请求 204 ×3（延迟/抖动）
+  → 隧道下载 256KB（吞吐）→ 经隧道查出口国家 → 评分分级 → 写 KV。
+- **为什么要 Token**：「手动触发测速」按钮是通过 **GitHub Actions workflow_dispatch** 触发的，
+  调 GitHub API 必须带 Token；不配就走本地命令（按钮会自动复制命令给你）。
+- **cfnew 怎么测**：它的面板自己跑测速（面板服务器视角），或直接用第三方优选列表；
+  两者都不是「你的网络」视角，所以会出现"面板显示快、实际慢"。
+
+### 5. 环境变量一览（触发器相关）
+| 变量 | 作用 |
+| --- | --- |
+| `gh_token` | GitHub PAT（仅需 actions:write） |
+| `gh_repo` | `owner/repo`，如 `moneyfly006/cfmux` |
+| `gh_workflow` | 默认 `refresh-quality.yml` |
+| `gh_ref` | 默认 `main` |

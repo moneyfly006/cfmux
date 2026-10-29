@@ -167,8 +167,10 @@ export default {
 
 const VERSION = 'cfmux/1.0';
 
-function json(o, status = 200) {
-  return new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+function json(o, status = 200, extra) {
+  const h = { 'content-type': 'application/json', 'cache-control': 'no-store' };
+  if (extra) Object.assign(h, extra);
+  return new Response(JSON.stringify(o), { status, headers: h });
 }
 
 async function diag(request) {
@@ -346,7 +348,8 @@ async function resolveEntries(request, env, url) {
   const st = await getSettings(env);
   const limitRaw = url.searchParams.get('limit');
   const limit = Math.min(limitRaw === null ? (st.limit || 0) : +limitRaw, 300);
-  const candCap = limit > 0 ? limit : 2000;   // 0/缺省 → 候选全量参与
+  const candRaw = url.searchParams.get('cand');          // 单独控制候选数量（默认全量）
+  const candCap = candRaw ? Math.min(+candRaw, 2000) : 2000;
   const wantRegion = (url.searchParams.get('region') || '').trim().toUpperCase();
   const like = (url.searchParams.get('like') || '').trim();   // 域名/IP 关键字过滤
 
@@ -510,7 +513,12 @@ async function buildSubscription(request, env, url) {
   };
   const sn = limited.map((n) => ({ value: n.value, name: n.name, host: n.host, uuid: n.uuid }));
   if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(sn, url, wsPath), { headers: hdr });
-  if (target === 'clash' || target === 'stash' || target === 'mihomo') return new Response(clashConfig(sn, url, wsPath), { headers: hdr });
+  if (target === 'clash' || target === 'stash' || target === 'mihomo' || target === 'meta') return new Response(clashConfig(sn, url, wsPath), { headers: hdr });
+  if (target === 'plain' || target === 'text' || target === 'uri') return new Response(v2rayLinks(sn, url, wsPath), { headers: hdr });
+  if (target === 'json') return json({ nodes: sn.map((n) => ({ name: n.name, host: n.host, uuid: n.uuid, server: n.value, port: 443, sni: n.host, path: wsPath, ws: true, tls: true })) }, 200, hdr);
+  if (target === 'qx' || target === 'quantumult') return new Response(qxConfig(sn, wsPath), { headers: hdr });
+  if (target === 'loon') return new Response(loonConfig(sn, wsPath), { headers: hdr });
+  if (target === 'surge') return new Response(surgeConfig(sn, wsPath), { headers: hdr });
   return new Response(b64(v2rayLinks(sn, url, wsPath)), { headers: hdr });
 }
 
@@ -687,6 +695,24 @@ function vlessLink(n, url, wsPath) {
 }
 function v2rayLinks(nodes, url, wsPath) { return nodes.map((n) => vlessLink(n, url, wsPath)).join('\n'); }
 
+function qxConfig(nodes, wsPath) {
+  // Quantumult X 格式
+  return nodes.map((n) => {
+    const p = wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048';
+    return `vless=${n.value}:443, method=none, password=${n.uuid}, obfs=wss, obfs-host=${n.host}, obfs-uri=${p}, tls-verify=false, fast-open=false, udp-relay=false, tag=${n.name}`;
+  }).join('\n');
+}
+function loonConfig(nodes, wsPath) {
+  // Loon 格式
+  return nodes.map((n) => {
+    const p = wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048';
+    return `${n.name} = VLESS,${n.value},443,"${n.uuid}",transport=ws,path=${p},host=${n.host},tls=true,sni=${n.host},skip-cert-verify=true`;
+  }).join('\n');
+}
+function surgeConfig(nodes, wsPath) {
+  // Surge 不支持 VLESS；用 Trojan-WS 需要内核开启 et=yes。这里给出可直接用的 Clash 提示
+  return '# Surge 不支持 VLESS。请使用 target=clash / singbox / qx / loon。\n# 如需 Surge，可在数据面内核开启 Trojan-WS(et=yes)，并改用 Trojan 订阅。\n';
+}
 function clashConfig(nodes, url, wsPath) {
   const host = nodes[0]?.host;
   const proxies = nodes.map((n) => `  - {name: "${n.name}", type: vless, server: ${n.value}, port: 443, uuid: ${n.uuid}, tls: true, servername: ${n.host}, network: ws, ws-opts: {path: "${wsPath}?ed=2048", headers: {Host: ${host}}}, udp: false}`);
@@ -925,16 +951,10 @@ aside h1{font-size:0}}
 
 <section id="tab-subs" hidden>
   <h2>订阅</h2>
-  <div class="grid2">
-    <div class="card"><div class="k">通用 / V2Ray</div><code id="s-base64"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-base64')">复制</button></div></div>
-    <div class="card"><div class="k">Clash / Mihomo / Stash</div><code id="s-clash"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-clash')">复制</button></div></div>
-    <div class="card"><div class="k">sing-box</div><code id="s-singbox"></code><div style="margin-top:8px"><button class="btn alt" onclick="copy('s-singbox')">复制</button></div></div>
-    <div class="card"><div class="k">二维码（手机扫一扫导入）</div>
-      <div id="qr" style="margin-top:8px"></div>
-      <div class="dim" style="font-size:11px;margin-top:6px">扫码后由客户端导入通用订阅</div>
-    </div>
-    <div class="card"><div class="k">按国家筛选（region 参数用法）</div><div class="dim" style="font-size:12px">在订阅 URL 后加 <code>&amp;like=美国</code> 或 <code>&amp;perEntry=1</code>；<code>limit</code> 控制节点数。</div></div>
-  </div>
+  <div class="toolbar"><span class="dim">点“复制”后粘贴到客户端；带 ?nocache=1 可绕过 60 秒缓存</span></div>
+  <div class="grid2" id="sub-list"></div>
+  <div class="card" style="margin-top:12px"><div class="k">二维码（手机扫一扫）</div><div id="qr" style="margin-top:10px"></div>
+    <div class="dim" style="font-size:11px;margin-top:6px">通用订阅，客户端自动识别</div></div>
 </section>
 
 <section id="tab-preferred" hidden>
@@ -1130,11 +1150,23 @@ function table(arr, cols, map){
   return '<div style="max-height:60vh;overflow:auto"><table><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr>'+
     arr.map(n=>'<tr>'+map(n).map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</table></div>';
 }
+const SUB_FORMATS = [
+  ['通用 Base64（V2Ray / Shadowrocket / v2rayN）', '/sub'],
+  ['Clash / Clash Meta / Stash / Mihomo', '/sub?target=clash'],
+  ['sing-box', '/sub?target=singbox'],
+  ['原始 URI 列表（纯文本）', '/sub?target=plain'],
+  ['JSON 节点列表（自建客户端用）', '/sub?target=json'],
+  ['Quantumult X', '/sub?target=qx'],
+  ['Loon', '/sub?target=loon'],
+];
 function renderSubs(){
   const base = STATE.base;
-  $('s-base64').textContent = base+'/sub';
-  $('s-clash').textContent = base+'/sub?target=clash';
-  $('s-singbox').textContent = base+'/sub?target=singbox';
+  $('sub-list').innerHTML = SUB_FORMATS.map(([label, path], i) =>
+    '<div class="card"><div class="k">'+label+'</div>'+
+    '<code id="sl-'+i+'" style="display:block;margin-top:8px;word-break:break-all">'+base+path+'</code>'+
+    '<div style="margin-top:8px"><button class="btn alt" onclick="copy(\'sl-'+i+'\')">复制</button> '+
+    '<a class="btn alt" target="_blank" href="'+base+path+'" style="text-decoration:none">打开</a></div></div>'
+  ).join('');
   $('qr').innerHTML = '<img alt="subscription qr" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(base+'/sub') + '">';
 }
 function renderEntries(){
