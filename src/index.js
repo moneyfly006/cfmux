@@ -95,6 +95,36 @@ function withTimeout(promise, ms, onTimeout) {
   });
 }
 
+// ---------- 流量计数（近似：isolate 内存累计，最多 5 分钟落一次 KV）----------
+let TRAFFIC = {};
+let LAST_FLUSH = Date.now();
+function trafficBump(kind) {
+  const d = new Date().toISOString().slice(0, 10);
+  const row = (TRAFFIC[d] ||= { ws: 0, sub: 0, other: 0 });
+  row[kind] = (row[kind] || 0) + 1;
+}
+async function trafficFlush(env, force) {
+  if (!env.KV) return;
+  const pendingTotal = Object.values(TRAFFIC).reduce((a, r) => a + (r.ws || 0) + (r.sub || 0) + (r.other || 0), 0);
+  // 攒够 20 次或满 5 分钟才落盘，避免 KV 写入超限（免费版 1000 次/天）
+  if (!force && pendingTotal < 20 && Date.now() - LAST_FLUSH < 300000) return;
+  LAST_FLUSH = Date.now();
+  const pending = TRAFFIC;
+  TRAFFIC = {};
+  try {
+    let cur = {};
+    try { cur = JSON.parse((await env.KV.get('traffic')) || '{}'); } catch {}
+    for (const [d, row] of Object.entries(pending)) {
+      const t = (cur[d] ||= { ws: 0, sub: 0, other: 0 });
+      for (const k of ['ws', 'sub', 'other']) t[k] = (t[k] || 0) + (row[k] || 0);
+    }
+    // 只保留最近 30 天
+    const keys = Object.keys(cur).sort().slice(-30);
+    const trim = {}; for (const k of keys) trim[k] = cur[k];
+    await env.KV.put('traffic', JSON.stringify(trim));
+  } catch (e) { TRAFFIC = pending; }
+}
+
 // ---------- 主入口 ----------
 export default {
   async fetch(request, env, ctx) {
@@ -107,7 +137,7 @@ export default {
       return json({ ok: true, v: VERSION, colo: request.cf?.colo, ts: Date.now() });
     }
     if (url.pathname === '/diag') { const d = await diag(request); const o = await d.json(); o.uuidLen = uuidHex.length; o.uuidSet = !!uuidHex; o.pathKey = pathKey; return json(o); }
-    if (url.pathname === '/sub') return subscription(request, env, url);
+    if (url.pathname === '/sub') { trafficBump('sub'); ctx.waitUntil(trafficFlush(env)); return subscription(request, env, url); }
     if (url.pathname === '/panel') return panelPage(request, env, url);
     if (url.pathname === '/api/entries') return apiEntries(request, env, url);
     if (url.pathname === '/api/quality') return apiQuality(request, env, url);
@@ -115,6 +145,8 @@ export default {
     if (url.pathname === '/api/action') return apiAction(request, env, url);
     if (url.pathname === '/api/import') return apiImport(request, env, url);
     if (url.pathname === '/api/trigger') return apiTrigger(request, env, url);
+    if (url.pathname === '/api/kernel') return apiKernel(request, env, url);
+    if (url.pathname === '/api/traffic') return apiTraffic(request, env, url);
     if (url.pathname === '/admin') return adminPage(request, env, url);
     if (url.pathname === '/admin/login') return adminLogin(request, env, url);
     if (url.pathname === '/admin/logout') return adminLogout(request, env, url);
@@ -128,6 +160,7 @@ export default {
     if (upgrade !== 'websocket') {
       return new Response(VERSION + '\nhello', { headers: { 'content-type': 'text/plain; charset=utf-8' } });
     }
+    trafficBump('ws'); ctx.waitUntil(trafficFlush(env));
     return proxyWebSocket(request, env, uuidHex);
   },
 };
@@ -582,6 +615,46 @@ async function apiTrigger(request, env, url) {
   } catch (e) { return json({ ok: false, msg: String(e).slice(0, 100) }, 200); }
 }
 
+async function apiKernel(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  if (request.method === 'GET') {
+    const host = url.searchParams.get('host'), uuid = url.searchParams.get('uuid');
+    if (!host || !uuid) return json({ ok: false, msg: '缺少 host/uuid' }, 400);
+    try {
+      const r = await fetch(`https://${host}/${uuid}/api/config`, { cf: { cacheTtl: 0, timeoutMs: 8000 } });
+      if (!r.ok) return json({ ok: false, msg: `数据面返回 HTTP ${r.status}` }, 200);
+      return json({ ok: true, host, config: await r.json() });
+    } catch (e) { return json({ ok: false, msg: '拉取失败: ' + String(e).slice(0, 80) }, 200); }
+  }
+  // POST 保存
+  const body = await request.json().catch(() => ({}));
+  const host = String(body.host || ''), uuid = String(body.uuid || '');
+  if (!host || !uuid || !body.config) return json({ ok: false, msg: '缺少 host/uuid/config' }, 400);
+  try {
+    const r = await fetch(`https://${host}/${uuid}/api/config`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body.config), cf: { cacheTtl: 0, timeoutMs: 8000 },
+    });
+    const t = await r.text();
+    let j = null; try { j = JSON.parse(t); } catch {}
+    return json({ ok: r.ok && (!j || j.success !== false), msg: (j && j.message) || t.slice(0, 120), config: j && j.config });
+  } catch (e) { return json({ ok: false, msg: '保存失败: ' + String(e).slice(0, 80) }, 200); }
+}
+
+async function apiTraffic(request, env, url) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, msg: '未登录' }, 401);
+  let t = {};
+  try { if (env.KV) t = JSON.parse((await env.KV.get('traffic')) || '{}'); } catch {}
+  // 把内存里未落盘的也算上
+  const live = JSON.parse(JSON.stringify(t));
+  for (const [d, row] of Object.entries(TRAFFIC)) {
+    const x = (live[d] ||= { ws: 0, sub: 0, other: 0 });
+    for (const k of ['ws', 'sub', 'other']) x[k] = (x[k] || 0) + (row[k] || 0);
+  }
+  const quota = +(await getSettings(env)).dailyQuota || 100000;
+  return json({ ok: true, traffic: live, quota, entries: (await getEntries(env)).length });
+}
+
 async function apiQuality(request, env, url) {
   const q = await getQuality(env);
   const th = await getThreshold(env);
@@ -806,8 +879,12 @@ input,select,textarea{background:#0b1220;border:1px solid #1b253c;color:#e6edf7;
 textarea{width:100%;min-height:120px;font:12px/1.5 ui-monospace,Menlo,monospace}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .toolbar input{flex:1;min-width:160px}
-#toast{position:fixed;right:18px;bottom:18px;background:#132038;border:1px solid #1b253c;padding:10px 14px;border-radius:9px;font-size:13px;opacity:0;transition:.2s;pointer-events:none}
-#toast.on{opacity:1}
+#toast{position:fixed;left:50%;top:26px;transform:translateX(-50%) translateY(-12px);background:#14532d;border:1px solid #22c55e;color:#dcfce7;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:500;opacity:0;transition:.25s;pointer-events:none;z-index:99;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.err{background:#450a0a;border-color:#ef4444;color:#fee2e2}
+.status{font-size:12px;margin-left:8px}
+.status.ok{color:#4ade80}.status.err{color:#f87171}
+.btn:disabled{opacity:.55;cursor:default}
 code{background:#0b1220;padding:1px 5px;border-radius:4px;font-size:11.5px;word-break:break-all}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:900px){.grid2{grid-template-columns:1fr}aside{width:60px}aside h1 span,aside nav a{padding-left:4px;font-size:0}
@@ -819,6 +896,8 @@ aside h1{font-size:0}}
 <a href="#" data-tab="nodes">🛰 节点质量</a>
 <a href="#" data-tab="subs">📥 订阅</a>
 <a href="#" data-tab="preferred">⭐ 优选</a>
+<a href="#" data-tab="kernel">🧠 内核</a>
+<a href="#" data-tab="traffic">📈 流量</a>
 <a href="#" data-tab="entries">🧩 数据面</a>
 <a href="#" data-tab="settings">⚙️ 设置</a>
 <a href="/panel" target="_blank">🌐 公开状态页</a>
@@ -862,18 +941,58 @@ aside h1{font-size:0}}
   <h2>优选列表</h2>
   <div class="toolbar">
     <input id="imp-url" placeholder="粘贴一个「一行一个」的 IP/域名 列表地址，例如 https://bestcf.fxxk.dedyn.io/cf_domains.txt">
-    <button class="btn" onclick="importPreferred()">从网址导入</button>
-    <button class="btn alt" onclick="triggerRun()">手动触发测速</button>
+    <button class="btn" onclick="importPreferred(this)">从网址导入</button>
+    <button class="btn alt" onclick="triggerRun(this)">手动触发测速</button>
   </div>
   <div class="dim" id="prefHint" style="margin-bottom:8px"></div>
   <textarea id="pref-text" style="min-height:300px"></textarea>
-  <div style="margin-top:10px"><button class="btn" onclick="savePreferred()">保存优选列表</button>
-    <button class="btn alt" onclick="loadPreferred()">重新读取</button></div>
+  <div style="margin-top:10px"><button class="btn" onclick="savePreferred(this)">保存优选列表</button><span id="st-pref" class="status"></span>
+    <button class="btn alt" onclick="loadPreferred(this)">重新读取</button></div>
+</section>
+
+<section id="tab-kernel" hidden>
+  <h2>内核配置</h2>
+  <div class="toolbar">
+    <select id="k-plane"></select>
+    <button class="btn" onclick="loadKernel(this)">读取配置</button>
+    <button class="btn" onclick="saveKernel(this)">保存到数据面</button>
+    <span class="dim" id="k-hint"></span>
+  </div>
+  <div class="grid2">
+    <div class="card"><div class="k">协议开关</div>
+      <div class="toolbar" style="flex-direction:column;align-items:stretch;margin-top:8px">
+        <label class="dim" style="font-size:12px">VLESS-WS (ev)<select id="k-ev"><option>yes</option><option>no</option></select></label>
+        <label class="dim" style="font-size:12px">Trojan-WS (et)<select id="k-et"><option>yes</option><option>no</option></select></label>
+        <label class="dim" style="font-size:12px">VLESS-XHTTP (ex)<select id="k-ex"><option>yes</option><option>no</option></select></label>
+        <label class="dim" style="font-size:12px">ECH (ech)<select id="k-ech"><option>yes</option><option>no</option></select></label>
+      </div>
+    </div>
+    <div class="card"><div class="k">参数</div>
+      <div class="toolbar" style="flex-direction:column;align-items:stretch;margin-top:8px">
+        <label class="dim" style="font-size:12px">自定义路径 (d)<input id="k-d" placeholder="留空=默认"></label>
+        <label class="dim" style="font-size:12px">ProxyIP (p)<input id="k-p" placeholder="如 1.2.3.4 或域名"></label>
+        <label class="dim" style="font-size:12px">Trojan 密码 (tp)<input id="k-tp"></label>
+        <label class="dim" style="font-size:12px">自定义 DNS<input id="k-dns"></label>
+        <label class="dim" style="font-size:12px">ECH 域名<input id="k-echdom"></label>
+        <label class="dim" style="font-size:12px">伪装首页 (homepage)<input id="k-home"></label>
+        <label class="dim" style="font-size:12px">订阅转换后端 (s)<input id="k-s"></label>
+      </div>
+    </div>
+  </div>
+  <div class="card"><div class="k">原始配置 JSON（高级：可直接改任何字段）</div>
+    <textarea id="k-raw" style="min-height:220px"></textarea></div>
+</section>
+
+<section id="tab-traffic" hidden>
+  <h2>流量统计</h2>
+  <div class="cards" id="t-cards"></div>
+  <div class="card"><div class="k">近 7 天请求量（本机计数，近似）</div><div id="t-chart" style="margin-top:10px"></div></div>
+  <div class="card"><div class="k">明细</div><div id="t-table"></div></div>
 </section>
 
 <section id="tab-entries" hidden>
   <h2>数据面</h2>
-  <div class="toolbar"><button class="btn" onclick="addEntry()">+ 添加数据面</button><button class="btn alt" onclick="saveEntries()">保存</button><span class="dim" id="entryHint"></span></div>
+  <div class="toolbar"><button class="btn" onclick="addEntry()">+ 添加数据面</button><button class="btn alt" onclick="saveEntries(this)">保存</button><span id="st-entries" class="status"></span><span class="dim" id="entryHint"></span></div>
   <div id="entryTable"></div>
 </section>
 
@@ -894,25 +1013,49 @@ aside h1{font-size:0}}
       <div class="k" style="margin-top:10px">区域映射 colos（JSON）</div><textarea id="f-colos"></textarea>
     </div>
   </div>
-  <div style="margin-top:12px"><button class="btn" onclick="saveSettings()">保存设置</button></div>
+  <div style="margin-top:12px"><button class="btn" onclick="saveSettings(this)">保存设置</button><span id="st-settings" class="status"></span></div>
 </section>
 </main></div><div id="toast"></div>
 <script>
 let STATE = null;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('on'); setTimeout(()=>t.classList.remove('on'),1800); }
-function copy(id){ const txt=$(id).textContent; navigator.clipboard.writeText(txt).then(()=>toast('已复制'),()=>toast('复制失败')); }
+function toast(msg, isErr){ const t=$('toast'); t.textContent=(isErr?'✗ ':'✓ ')+msg; t.className='on'+(isErr?' err':''); clearTimeout(window.__tt); window.__tt=setTimeout(()=>{t.className='';},3000); }
+function status(el, msg, ok){ if(!el) return; el.textContent = msg; el.className = 'status ' + (ok?'ok':'err'); }
+function busy(btn, label, fn){
+  const old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = label || '处理中…'; }
+  return Promise.resolve().then(fn).finally(()=>{ if (btn) { btn.disabled=false; btn.textContent = old; } });
+}
+function copy(id){
+  const txt = $(id).textContent;
+  const done = () => toast('已复制到剪贴板');
+  const fail = () => toast('复制失败，请手动选中复制', true);
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).then(done).catch(()=>{legacy();}); return; }
+  } catch(e) {}
+  legacy();
+  function legacy(){
+    try {
+      const ta = document.createElement('textarea'); ta.value = txt; ta.style.position='fixed'; ta.style.left='-9999px';
+      document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); document.body.removeChild(ta);
+      ok ? done() : fail();
+    } catch(e) { fail(); }
+  }
+}
 document.querySelectorAll('nav a[data-tab]').forEach(a=>a.addEventListener('click',(e)=>{
   e.preventDefault();
   document.querySelectorAll('nav a').forEach(x=>x.classList.remove('on')); a.classList.add('on');
-  ['overview','nodes','subs','preferred','entries','settings'].forEach(t=>$('tab-'+t).hidden = (t!==a.dataset.tab));
+  ['overview','nodes','subs','preferred','kernel','traffic','entries','settings'].forEach(t=>$('tab-'+t).hidden = (t!==a.dataset.tab));
+  if (a.dataset.tab==='traffic') loadTraffic().catch(()=>{});
+  if (a.dataset.tab==='kernel') { renderPlanes(); if (!$('k-raw').value) loadKernel().catch(()=>{}); }
 }));
 
 async function load(){
   const r = await fetch('/api/state'); STATE = await r.json();
   EDIT.entries = JSON.parse(JSON.stringify(STATE.entries||[]));   // 只在加载时初始化
   renderCards(); renderSpark(); renderTop(); renderNodes(); renderSubs(); renderEntries(); fillSettings(); renderPreferred();
+  renderPlanes(); loadTraffic().catch(()=>{});
 }
 function renderCards(){
   const q = STATE.quality || {}; const arr = Object.values(q);
@@ -1016,15 +1159,24 @@ function fillSettings(){
   $('f-sources').value = s.sources||''; $('f-colos').value = JSON.stringify(STATE.colos||{}, null, 1);
 }
 async function post(url, body){ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
-async function saveSettings(){
-  const body = { minScore:+$('f-minScore').value, minTput:+$('f-minTput').value, maxAgeHours:+$('f-maxAgeHours').value,
-    perEntry:+$('f-perEntry').value, requireQuality:$('f-requireQuality').value, limit:+$('f-limit').value,
-    sources:$('f-sources').value, colos:$('f-colos').value };
-  const d = await post('/admin/save', body); toast(d.ok?'已保存':'失败：'+(d.msg||'')); if(d.ok) load();
+async function saveSettings(btn){
+  return busy(btn, '保存中…', async () => {
+    const body = { minScore:+$('f-minScore').value, minTput:+$('f-minTput').value, maxAgeHours:+$('f-maxAgeHours').value,
+      perEntry:+$('f-perEntry').value, requireQuality:$('f-requireQuality').value, limit:+$('f-limit').value,
+      sources:$('f-sources').value, colos:$('f-colos').value };
+    const el = $('st-settings'); status(el, '保存中…', true);
+    const d = await post('/admin/save', body);
+    if (d.ok) { status(el, '已保存 ' + new Date().toLocaleTimeString(), true); toast('设置已保存并生效'); await load(); }
+    else { status(el, '保存失败：' + (d.msg||'未知错误'), false); toast('保存失败：' + (d.msg||'未知错误'), true); }
+  });
 }
-async function saveEntries(){
-  const d = await post('/admin/save', { entries: JSON.stringify(EDIT.entries) });
-  toast(d.ok?'数据面已保存':'失败：'+(d.msg||'')); if(d.ok) load();
+async function saveEntries(btn){
+  return busy(btn, '保存中…', async () => {
+    const el = $('st-entries'); status(el, '保存中…', true);
+    const d = await post('/admin/save', { entries: JSON.stringify(EDIT.entries) });
+    if (d.ok) { status(el, '已保存 ' + EDIT.entries.length + ' 个数据面 ' + new Date().toLocaleTimeString(), true); toast('数据面已保存'); await load(); }
+    else { status(el, '失败：' + (d.msg||''), false); toast('保存失败：' + (d.msg||''), true); }
+  });
 }
 function renderPreferred(){
   const p = STATE.preferred || [];
@@ -1034,27 +1186,134 @@ function renderPreferred(){
   $('prefHint').textContent = '当前 ' + arr.length + ' 条；测速只对这里的条目 + sources 里的域名进行';
 }
 async function loadPreferred(){ await load(); toast('已重新读取'); }
-async function savePreferred(){
-  const lines = $('pref-text').value.split('\\n').map(x=>x.trim()).filter(Boolean);
-  const d = await post('/admin/save', { preferred: JSON.stringify(lines) });
-  toast(d.ok ? ('已保存 '+lines.length+' 条') : ('失败：'+(d.msg||''))); if (d.ok) load();
+async function savePreferred(btn){
+  return busy(btn, '保存中…', async () => {
+    const lines = $('pref-text').value.split('\\n').map(x=>x.trim()).filter(Boolean);
+    const el = $('st-pref'); status(el, '保存中…', true);
+    const d = await post('/admin/save', { preferred: JSON.stringify(lines) });
+    if (d.ok) { status(el, '已保存 ' + lines.length + ' 条 ' + new Date().toLocaleTimeString(), true); toast('优选列表已保存 ' + lines.length + ' 条'); await load(); }
+    else { status(el, '失败：' + (d.msg||''), false); toast('保存失败：' + (d.msg||''), true); }
+  });
 }
-async function importPreferred(){
+async function importPreferred(btn){
   const u = $('imp-url').value.trim();
-  if (!u) return toast('请先填网址');
-  const d = await post('/api/import', { url: u });
-  toast(d.ok ? ('导入成功：新增 '+d.added+' 条，共 '+d.total+' 条') : ('失败：'+(d.msg||'')));
-  if (d.ok) load();
+  if (!u) { toast('请先填写列表网址', true); return; }
+  return busy(btn, '导入中…', async () => {
+    const el = $('st-pref'); status(el, '导入中…', true);
+    const d = await post('/api/import', { url: u });
+    if (d.ok) { status(el, '导入新增 ' + d.added + ' 条，共 ' + d.total + ' 条', true); toast('导入成功：新增 ' + d.added + ' 条'); await load(); }
+    else { status(el, '导入失败：' + (d.msg||''), false); toast('导入失败：' + (d.msg||''), true); }
+  });
 }
-async function triggerRun(){
-  const d = await post('/api/trigger', {});
-  if (d.ok) toast(d.msg || '已触发');
-  else if (d.configured === false) { toast('未配置 gh_token，已复制本地命令'); 
-    navigator.clipboard && navigator.clipboard.writeText('cd ~/cfmux && ./tools/refresh.sh').catch(()=>{}); }
-  else toast('失败：' + (d.msg||''));
+async function triggerRun(btn){
+  return busy(btn, '触发中…', async () => {
+    const d = await post('/api/trigger', {});
+    if (d.ok) { toast(d.msg || '已触发测速'); }
+    else if (d.configured === false) { copyText('cd ~/cfmux && ./tools/refresh.sh'); toast('未配置 gh_token，已复制本地命令'); }
+    else { toast('触发失败：' + (d.msg||''), true); }
+  });
 }
+function copyText(txt){
+  try { if (navigator.clipboard) { navigator.clipboard.writeText(txt).catch(()=>{}); return; } } catch(e) {}
+  try { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); } catch(e) {}
+}
+
+// ---------- 内核配置 ----------
+function renderPlanes(){
+  const sel = $('k-plane'); if (!sel) return;
+  const es = STATE.entries || [];
+  sel.innerHTML = es.map((e,i)=>'<option value="'+i+'">'+esc(e.name||('plane'+i))+' — '+esc(e.host||'')+'</option>').join('')
+    || '<option value="">无数据面</option>';
+}
+function planeOf(){ const es=STATE.entries||[]; const i=+$('k-plane').value||0; return es[i]||null; }
+async function loadKernel(btn){
+  const e = planeOf(); if (!e) return toast('没有数据面');
+  if (btn) { btn.disabled = true; btn.textContent = '读取中…'; }
+  $('k-hint').textContent = '读取中…';
+  const r = await fetch('/api/kernel?host='+encodeURIComponent(e.host)+'&uuid='+encodeURIComponent(e.uuid));
+  const d = await r.json();
+  if (!d.ok) { $('k-hint').textContent='失败: '+(d.msg||''); return toast('读取失败'); }
+  const c = d.config;
+  $('k-ev').value = c.ev||'no'; $('k-et').value = c.et||'no'; $('k-ex').value = c.ex||'no'; $('k-ech').value = c.ech||'no';
+  $('k-d').value = c.d||''; $('k-p').value = c.p||''; $('k-tp').value = c.tp||'';
+  $('k-dns').value = c.customDNS||''; $('k-echdom').value = c.customECHDomain||'';
+  $('k-home').value = c.homepage||''; $('k-s').value = c.s||'';
+  $('k-raw').value = JSON.stringify(c, null, 1);
+  window.__kbase = c;
+  $('k-hint').textContent = '已读取 ' + e.host + ' · ' + new Date().toLocaleTimeString();
+  if (btn) { btn.disabled = false; btn.textContent = '读取配置'; }
+  toast('内核配置已读取');
+}
+async function saveKernel(btn){
+  const e = planeOf(); if (!e) return toast('没有数据面');
+  let cfg;
+  try { cfg = JSON.parse($('k-raw').value); } catch (err) { return toast('原始 JSON 格式错误'); }
+  // 表单值覆盖对应字段
+  cfg.ev=$('k-ev').value; cfg.et=$('k-et').value; cfg.ex=$('k-ex').value; cfg.ech=$('k-ech').value;
+  cfg.d=$('k-d').value; cfg.p=$('k-p').value; cfg.tp=$('k-tp').value;
+  cfg.customDNS=$('k-dns').value; cfg.customECHDomain=$('k-echdom').value;
+  cfg.homepage=$('k-home').value; cfg.s=$('k-s').value;
+  const base = window.__kbase || {};
+  const diff = {};
+  for (const k of Object.keys(cfg)) if (JSON.stringify(cfg[k]) !== JSON.stringify(base[k])) diff[k] = cfg[k];
+  if (!Object.keys(diff).length) { toast('没有修改任何字段'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+  const d = await post('/api/kernel', { host: e.host, uuid: e.uuid, config: diff });
+  if (btn) { btn.disabled = false; btn.textContent = '保存到数据面'; }
+  $('k-hint').textContent = (d.ok ? '已保存到 ' + e.host : '失败：' + (d.msg||'')) + ' · ' + new Date().toLocaleTimeString();
+  toast(d.ok ? ('内核配置已保存：' + (d.msg||'')) : ('内核保存失败：' + (d.msg||'')), !d.ok);
+  if (d.ok) loadKernel();
+}
+
+// ---------- 流量统计 ----------
+async function loadTraffic(){
+  const d = await (await fetch('/api/traffic')).json();
+  if (!d.ok) return;
+  const t = d.traffic || {};
+  const days = Object.keys(t).sort().slice(-7);
+  const today = new Date().toISOString().slice(0,10);
+  const sumOf = (r) => (r.ws||0)+(r.sub||0)+(r.other||0);
+  const todayN = t[today] ? sumOf(t[today]) : 0;
+  const weekN = days.reduce((a,k)=>a+sumOf(t[k]),0);
+  const quota = d.quota || 100000;
+  const pct = Math.min(100, Math.round(todayN/quota*1000)/10);
+  const cards = [
+    ['今日请求', todayN.toLocaleString()],
+    ['每日配额', quota.toLocaleString()],
+    ['今日使用率', pct + ' %'],
+    ['近 7 天', weekN.toLocaleString()],
+  ];
+  $('t-cards').innerHTML = cards.map(([k,v])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('')
+    + '<div class="card" style="grid-column:1/-1"><div class="k">说明</div><div class="dim" style="font-size:12px;margin-top:6px">'
+    + '本机计数为近似值（Worker 多 isolate 各自累计，最多 5 分钟落一次 KV）；'
+    + '真实账单请以 Cloudflare 控制台为准。配额按每个数据面 10 万/天估算，实际共 ' + (d.entries||0) + ' 个数据面。</div></div>';
+  // 柱状图
+  const max = Math.max(1, ...days.map(k=>sumOf(t[k])));
+  const w = 620, h = 140, bw = days.length ? (w-20)/days.length-8 : 40;
+  const bars = days.map((k,i)=>{
+    const v = sumOf(t[k]); const bh = Math.max(2, v/max*(h-28));
+    const x = 10 + i*((w-20)/Math.max(1,days.length));
+    return '<rect x="'+x.toFixed(1)+'" y="'+(h-20-bh).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+bh.toFixed(1)+'" rx="3" fill="#4ade80" opacity="0.8"/>'
+      + '<text x="'+(x+bw/2).toFixed(1)+'" y="'+(h-6)+'" fill="#8b9bb4" font-size="9" text-anchor="middle">'+k.slice(5)+'</text>'
+      + '<text x="'+(x+bw/2).toFixed(1)+'" y="'+(h-24-bh).toFixed(1)+'" fill="#e6edf7" font-size="9" text-anchor="middle">'+(v>999?(v/1000).toFixed(1)+'k':v)+'</text>';
+  }).join('');
+  $('t-chart').innerHTML = '<svg width="'+w+'" height="'+h+'" style="max-width:100%">'+bars+'</svg>';
+  // 表格
+  const rows = days.slice().reverse().map(k=>{
+    const r = t[k];
+    return '<tr><td>'+k+'</td><td>'+(r.ws||0)+'</td><td>'+(r.sub||0)+'</td><td>'+(r.other||0)+'</td><td>'+sumOf(r)+'</td></tr>';
+  }).join('');
+  $('t-table').innerHTML = days.length
+    ? '<table><tr><th>日期</th><th>代理(WS)</th><th>订阅</th><th>其它</th><th>合计</th></tr>'+rows+'</table>'
+    : '<div class="dim">暂无数据（产生请求后 5 分钟内会出现）</div>';
+}
+
 function doAct(el){ act(el.dataset.act, el.dataset.key); }
-async function act(type, key){ const d = await post('/api/action', {type, key}); toast(d.ok?'已执行':'失败'); if(d.ok) load(); }
+async function act(type, key){
+  const label = {pin:'置顶',unpin:'取消置顶',ban:'熔断',unban:'解除'}[type] || type;
+  const d = await post('/api/action', {type, key});
+  if (d.ok) { toast(label + '成功'); await load(); } else { toast(label + '失败：' + (d.msg||''), true); }
+}
 load();
 </script></body></html>`;
 
