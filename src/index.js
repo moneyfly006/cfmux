@@ -410,7 +410,7 @@ async function resolveEntries(request, env, url) {
 
 function regionLabel(q, e, colos) {
   // 优先：质量引擎实测的真实出口国家 → 其次 colo 映射 → 最后类型标记
-  if (q && q.cc) return CC_NAME[q.cc] || q.cc;
+  if (q && q.cc) return CC_NAME[q.cc] || q.country || q.cc;
   if (q && q.country) return q.country;
   const c = colos && colos[e.value];
   if (c) return REGION_NAMES[c] || CC_NAME[c] || c;
@@ -420,6 +420,14 @@ const CC_NAME = {
   HK: '香港', TW: '台湾', JP: '日本', KR: '韩国', SG: '新加坡', MY: '马来西亚', TH: '泰国', VN: '越南',
   PH: '菲律宾', ID: '印尼', IN: '印度', US: '美国', CA: '加拿大', GB: '英国', DE: '德国', FR: '法国',
   NL: '荷兰', RU: '俄罗斯', AU: '澳洲', BR: '巴西', TR: '土耳其', AE: '阿联酋', CN: '中国', MO: '澳门',
+  SE: '瑞典', ES: '西班牙', IT: '意大利', CH: '瑞士', AT: '奥地利', BE: '比利时', PL: '波兰', CZ: '捷克',
+  UA: '乌克兰', IL: '以色列', SA: '沙特', EG: '埃及', ZA: '南非', NG: '尼日利亚', KE: '肯尼亚',
+  AR: '阿根廷', CL: '智利', CO: '哥伦比亚', PE: '秘鲁', MX: '墨西哥', NZ: '新西兰', IE: '爱尔兰',
+  PT: '葡萄牙', GR: '希腊', FI: '芬兰', NO: '挪威', DK: '丹麦', HU: '匈牙利', RO: '罗马尼亚',
+  BG: '保加利亚', HR: '克罗地亚', SK: '斯洛伐克', LT: '立陶宛', LV: '拉脱维亚', EE: '爱沙尼亚',
+  PK: '巴基斯坦', BD: '孟加拉', LK: '斯里兰卡', NP: '尼泊尔', KH: '柬埔寨', MM: '缅甸', LA: '老挝',
+  MN: '蒙古', KZ: '哈萨克', UZ: '乌兹别克', QA: '卡塔尔', KW: '科威特', BH: '巴林', OM: '阿曼',
+  JO: '约旦', LB: '黎巴嫩', IQ: '伊拉克', IR: '伊朗', MA: '摩洛哥', TN: '突尼斯', DZ: '阿尔及利亚',
 };
 
 async function subscription(request, env, url) {
@@ -494,7 +502,7 @@ async function buildSubscription(request, env, url) {
         score: q ? (stale ? Math.max(0, (q.score ?? 0) - 15) : q.score) : null,
         tpass: trojanOn ? (kc.tp || '').trim() : '',
         value: c.value, uuid, host,
-        name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
+        name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}${trojanOn && !vlessOn ? '-T' : ''}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
         rawScore: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
         cc: q ? q.cc : null, country: q ? q.country : null, exitIp: q ? q.exitIp : null,
         dedupKey: (q && (q.exitIp || q.resolved)) || c.value,
@@ -754,9 +762,30 @@ async function apiQualityReport(request, env, url) {
     cur[k] = v; n++;
   }
   await env.KV.put('quality', JSON.stringify(cur));
+
+  // 自动晋升：把本轮高分入口写入 preferred（去重、上限 200），实现“自动加入优选”
+  let promoted = 0;
+  try {
+    const st = await getSettings(env);
+    if (st.autoPromote !== false) {
+      const minScore = st.promoteMinScore ?? 55;
+      const top = Object.entries(cur)
+        .filter(([, v]) => v && v.ok && (v.score ?? 0) >= minScore && !v.cooldownUntil)
+        .sort((a, b) => (b[1].score ?? 0) - (a[1].score ?? 0))
+        .slice(0, 60)
+        .map(([k]) => k.split('|')[1])
+        .filter(Boolean);
+      let pref = [];
+      try { pref = JSON.parse((await env.KV.get('preferred')) || '[]'); } catch {}
+      const set = new Set(pref.map((x) => (typeof x === 'string' ? x : x.ip)));
+      for (const v of top) if (!set.has(v)) { pref.push(v); set.add(v); promoted++; }
+      if (promoted) await env.KV.put('preferred', JSON.stringify(pref.slice(-200)));
+    }
+  } catch {}
+
   // 记录上报来源与时间
   try { await env.KV.put('report_meta', JSON.stringify({ ts: Date.now(), source: String(body.source || 'ci').slice(0, 40), count: n })); } catch {}
-  return json({ ok: true, merged: n, total: Object.keys(cur).length });
+  return json({ ok: true, merged: n, total: Object.keys(cur).length, promoted });
 }
 
 async function apiStats(request, env, url) {

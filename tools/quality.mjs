@@ -116,6 +116,8 @@ const GEO_SOURCES = [
   { host: 'ip-api.com', path: '/json/?fields=status,country,countryCode,city,query', parse: (t) => { const i = t.indexOf('{'); const j = JSON.parse(t.slice(i, t.lastIndexOf('}') + 1)); return j.status === 'success' ? { cc: j.countryCode, country: j.country, city: j.city, ip: j.query } : null; } },
   { host: 'ipinfo.io', path: '/json', parse: (t) => { const i = t.indexOf('{'); const j = JSON.parse(t.slice(i, t.lastIndexOf('}') + 1)); return j.country ? { cc: j.country, country: j.country, city: j.city, ip: j.ip } : null; } },
   { host: 'ip.3322.net', path: '/', parse: (t) => { const m = t.match(/(\d{1,3}(?:\.\d{1,3}){3})/); return m ? { cc: null, country: null, city: null, ip: m[1] } : null; } },
+  { host: 'ifconfig.me', path: '/ip', parse: (t) => { const m = t.match(/(\d{1,3}(?:\.\d{1,3}){3})/); return m ? { cc: null, country: null, city: null, ip: m[1] } : null; } },
+  { host: 'ip.sb', path: '/ip', parse: (t) => { const m = t.match(/(\d{1,3}(?:\.\d{1,3}){3})/); return m ? { cc: null, country: null, city: null, ip: m[1] } : null; } },
 ];
 async function geoOf(entry, ip) {
   for (const src of GEO_SOURCES) {
