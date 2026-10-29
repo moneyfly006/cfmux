@@ -812,3 +812,79 @@ https://mux.moneyfly.club/admin   → 200
 https://mux.moneyfly.club/panel   → 200
 https://mux.moneyfly.club/sub     → 200（limit=5 时返回 5 个节点）
 ```
+
+## 二十二、节点生成原理（精确版）★
+
+### 1. 四类输入
+
+| 符号 | 名称 | 存在哪 | 内容 |
+| --- | --- | --- | --- |
+| `E` | entries 数据面 | KV `entries` | `{name, host, uuid, path}` |
+| `C` | candidates 优选入口 | KV `preferred` + `sources` | IP / 域名列表 |
+| `Q` | quality 实测表 | KV `quality` | `"host|cand" → {ok,score,tput,lat,jitter,cc,ts,cooldownUntil}` |
+| `K` | kernel 内核配置 | KV `kcfg:<host>`（面板保存时镜像） | `{ev,et,ex,ech,d,p,tp,...}` |
+
+### 2. 生成流程（严格顺序）
+
+```
+① 内核闸门 —— 决定「这个入口能不能出节点、出什么协议、用什么路径」
+   if (K.ev !== 'yes') && (K.et !== 'yes' || !K.tp)  → 跳过整个入口
+   proto = (K.ev === 'yes') ? 'vless' : 'trojan'
+   path  = K.d || '/'          ← 订阅路径跟随内核配置
+
+② 质量闸门 —— 决定「这个组合要不要」
+   必须存在 Q[host|cand]（requireQuality=true 时）
+   且：ok=true 且 未熔断(cooldownUntil<now) 且 score≥minScore
+       且 tput≥minTput 且 age≤maxAgeHours
+
+③ 后处理
+   dedup    同 exitIp/resolved 只留评分最高的一条
+   perEntry 每个入口取 topK（0=不限）
+   sort     pinned 优先，其余按 score 降序
+   limit    截断输出（只影响输出，不影响候选）
+
+④ 格式化  base64 / clash / singbox / plain / json / qx / loon
+```
+
+### 3. 两个关键结论（直接回答疑问）
+
+**Q：订阅出的是「测速之后的节点」还是「按内核配置出的节点」？**
+两个都是，但是分层的：
+
+- **内核配置决定"节点长什么样"**：协议（VLESS/Trojan）、WS 路径、该入口是否出现
+- **质量表决定"要不要它、排第几"**：只有实测达标且未过期的组合才输出
+
+**Q：为什么"达标节点"很多，订阅却少？**
+
+```
+候选 436（3 数据面 × 145 入口）
+  → 通过质量门槛 159
+  → 去重 -51（同一出口 IP 只留一条；这是主要差额）
+  → 最终输出 108
+```
+仪表盘「概览」已把这条漏斗显示出来（`/api/stats`）。
+
+### 4. 实测证据（内核 ↔ 订阅联动）
+
+| 实验 | 操作 | 订阅结果 |
+| --- | --- | --- |
+| 改路径 | mux-core `d=/zz9` | `mux-core.pages.dev → /zz9?ed=2048`；另两个入口仍是 `/?ed=2048` |
+| 关协议 | mux-core `ev=no` | mux-core 节点**全部消失**，仅剩 core2/core3 |
+| 恢复 | `ev=yes, d=/` | mux-core 节点恢复 |
+
+### 5. 实现细节（踩过的坑）
+
+- 内核的 `POST /api/config` **只接受白名单字段**，整包提交会返回「配置格式无效」
+  → 面板保存时只提交**改动字段**（diff）
+- 内核配置在 **isolate 内有缓存**，写完立即读可能拿到旧值
+  → 面板保存成功后把「基线 + 我们提交的补丁」镜像到 KV `kcfg:<host>`，
+  订阅以镜像为准（`?refreshKernel=1` 可强制实时拉取）
+- 内核保存空字符串表示「删除该字段」，所以改回默认路径应写 `/` 而不是空串
+
+### 6. 部署前双重校验（防止再把页面改坏）
+```bash
+./tools/deploy.sh
+# 1) node --check src/index.js
+# 2) tools/check-dash.js 渲染模板 → 提取 <script> → node --check
+# 3) wrangler pages deploy
+```

@@ -147,6 +147,7 @@ export default {
     if (url.pathname === '/api/trigger') return apiTrigger(request, env, url);
     if (url.pathname === '/api/kernel') return apiKernel(request, env, url);
     if (url.pathname === '/api/traffic') return apiTraffic(request, env, url);
+    if (url.pathname === '/api/stats') return apiStats(request, env, url);
     if (url.pathname === '/admin') return adminPage(request, env, url);
     if (url.pathname === '/admin/login') return adminLogin(request, env, url);
     if (url.pathname === '/admin/logout') return adminLogout(request, env, url);
@@ -294,6 +295,26 @@ async function getEntries(env) {
   if (st.entries && Array.isArray(st.entries) && st.entries.length) return st.entries;
   return [{ name: 'default', host: '', uuid: '' }];   // host 为空时用当前域名
 }
+async function getKernelConfig(env, entry, force) {
+  if (!entry || !entry.host || !entry.uuid) return null;
+  const key = `kcfg:${entry.host}`;
+  try {
+    if (env.KV && !force) {
+      const raw = await env.KV.get(key);
+      if (raw) { const o = JSON.parse(raw); if (o && o.cfg) return o.cfg; }   // 面板写入的权威副本
+    }
+  } catch {}
+  try {
+    const r = await fetch(`https://${entry.host}/${entry.uuid}/api/config`, { cf: { cacheTtl: 0, timeoutMs: 4000 } });
+    if (r.ok) {
+      const cfg = await r.json();
+      try { if (env.KV) await env.KV.put(key, JSON.stringify({ ts: Date.now(), cfg })); } catch {}
+      return cfg;
+    }
+  } catch {}
+  return null;
+}
+
 async function getThreshold(env) {
   const st = await getSettings(env);
   return {
@@ -429,10 +450,17 @@ async function buildSubscription(request, env, url) {
 
   // 组装候选：entry × preferred，质量优先
   let nodes = [];
+  const forceKernel = url.searchParams.get('refreshKernel') === '1';
   for (const e of entries) {
     const host = e.host || url.host;
     const uuid = e.uuid || env.uuid;
     if (!uuid) continue;
+    // 读取该数据面的内核配置：决定协议开关 + WS 路径（保证订阅与内核一致）
+    const kc = await getKernelConfig(env, e, forceKernel);
+    const vlessOn = !kc || kc.ev !== 'no';
+    const trojanOn = !!(kc && kc.et === 'yes' && String(kc.tp || '').trim());
+    const ePath = (kc && String(kc.d || '').trim()) ? String(kc.d).trim() : wsPath;
+    if (!vlessOn && !trojanOn) continue;   // 两种协议都关 → 跳过该入口
     for (const c of cand) {
       const q = quality[`${host}|${c.value}`];
       // 有质量数据 → 必须达标；无质量数据 → 在 requireQuality=false 时才放行
@@ -449,8 +477,10 @@ async function buildSubscription(request, env, url) {
         const hasAny = Object.keys(quality).some((k) => k.startsWith(host + '|'));
         if (hasAny) continue;
       }
+      const proto = vlessOn ? 'vless' : 'trojan';
       nodes.push({
-        entry: e.name || 'core',
+        entry: e.name || 'core', proto, path: ePath,
+        tpass: trojanOn ? (kc.tp || '').trim() : '',
         value: c.value, uuid, host,
         name: `${regionLabel(q, c, colosMap)}-${e.name || 'core'}-${String(nodes.length + 1).padStart(2, '0')}${q && q.tier ? '-' + q.tier : ''}${q && q.lat ? '-' + q.lat + 'ms' : ''}`,
         score: q ? q.score : null, tier: q ? q.tier : null, tput: q ? q.tput : null, lat: q ? q.lat : null,
@@ -511,7 +541,7 @@ async function buildSubscription(request, env, url) {
     'x-cfmux-dedup': String(picked.length - afterDedup.length),
     'x-cfmux-minscore': String(th.minScore),
   };
-  const sn = limited.map((n) => ({ value: n.value, name: n.name, host: n.host, uuid: n.uuid }));
+  const sn = limited.map((n) => ({ value: n.value, name: n.name, host: n.host, uuid: n.uuid, proto: n.proto || 'vless', path: n.path || wsPath, tpass: n.tpass || '' }));
   if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(sn, url, wsPath), { headers: hdr });
   if (target === 'clash' || target === 'stash' || target === 'mihomo' || target === 'meta') return new Response(clashConfig(sn, url, wsPath), { headers: hdr });
   if (target === 'plain' || target === 'text' || target === 'uri') return new Response(v2rayLinks(sn, url, wsPath), { headers: hdr });
@@ -645,7 +675,19 @@ async function apiKernel(request, env, url) {
     });
     const t = await r.text();
     let j = null; try { j = JSON.parse(t); } catch {}
-    return json({ ok: r.ok && (!j || j.success !== false), msg: (j && j.message) || t.slice(0, 120), config: j && j.config });
+    const ok = r.ok && (!j || j.success !== false);
+    if (ok && env.KV) {
+      try {
+        let base = {};
+        const cached = await env.KV.get('kcfg:' + host);
+        if (cached) base = JSON.parse(cached).cfg || {};
+        else { const g = await fetch(`https://${host}/${uuid}/api/config`, { cf: { cacheTtl: 0, timeoutMs: 4000 } }); if (g.ok) base = await g.json(); }
+        // 以「我们提交的补丁」为准（内核 isolate 缓存可能返回旧值）
+        const merged = { ...base, ...(j && j.config ? j.config : {}), ...(body.config || {}) };
+        await env.KV.put('kcfg:' + host, JSON.stringify({ ts: Date.now(), cfg: merged }));
+      } catch {}
+    }
+    return json({ ok, msg: (j && j.message) || t.slice(0, 120), config: j && j.config });
   } catch (e) { return json({ ok: false, msg: '保存失败: ' + String(e).slice(0, 80) }, 200); }
 }
 
@@ -661,6 +703,19 @@ async function apiTraffic(request, env, url) {
   }
   const quota = +(await getSettings(env)).dailyQuota || 100000;
   return json({ ok: true, traffic: live, quota, entries: (await getEntries(env)).length });
+}
+
+async function apiStats(request, env, url) {
+  const r = await buildSubscription(new Request(url.toString().replace('/api/stats', '/sub') + '?target=plain&limit=0&nocache=1'), env, new URL(url.toString().replace('/api/stats', '/sub')));
+  const h = r.headers;
+  return json({
+    ok: true,
+    candidates: +(h.get('x-cfmux-total') || 0),
+    passed: +(h.get('x-cfmux-pass') || 0),
+    deduped: +(h.get('x-cfmux-dedup') || 0),
+    nodes: +(h.get('x-cfmux-nodes') || 0),
+    minScore: +(h.get('x-cfmux-minscore') || 0),
+  });
 }
 
 async function apiQuality(request, env, url) {
@@ -687,10 +742,12 @@ function b64(s) { return btoa(unescape(encodeURIComponent(s))); }
 
 function vlessLink(n, url, wsPath) {
   const uuid = n.uuid, host = n.host;
-  const q = new URLSearchParams({
-    encryption: 'none', security: 'tls', sni: host, fp: 'chrome',
-    type: 'ws', host, path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048',
-  });
+  const p = (n.path || wsPath) + ((n.path || wsPath).includes('?') ? '&' : '?') + 'ed=2048';
+  if (n.proto === 'trojan') {
+    const q = new URLSearchParams({ security: 'tls', sni: host, type: 'ws', host, path: p });
+    return `trojan://${encodeURIComponent(n.tpass)}@${n.value}:443?${q.toString()}#${encodeURIComponent(n.name)}`;
+  }
+  const q = new URLSearchParams({ encryption: 'none', security: 'tls', sni: host, fp: 'chrome', type: 'ws', host, path: p });
   return `vless://${uuid}@${n.value}:443?${q.toString()}#${encodeURIComponent(n.name)}`;
 }
 function v2rayLinks(nodes, url, wsPath) { return nodes.map((n) => vlessLink(n, url, wsPath)).join('\n'); }
@@ -726,9 +783,9 @@ function clashConfig(nodes, url, wsPath) {
 
 function singboxConfig(nodes, url, wsPath) {
   const host = nodes[0]?.host;
-  const outs = nodes.map((n) => ({ type: 'vless', tag: n.name, server: n.value, server_port: 443, uuid: n.uuid,
+  const outs = nodes.map((n) => ({ type: n.proto === 'trojan' ? 'trojan' : 'vless', tag: n.name, server: n.value, server_port: 443, uuid: n.uuid, password: n.tpass || undefined,
     tls: { enabled: true, server_name: n.host, utls: { enabled: true, fingerprint: 'chrome' } },
-    transport: { type: 'ws', path: wsPath + (wsPath.includes('?') ? '&' : '?') + 'ed=2048', headers: { Host: n.host } } }));
+    transport: { type: 'ws', path: (n.path || wsPath) + ((n.path || wsPath).includes('?') ? '&' : '?') + 'ed=2048', headers: { Host: n.host } } }));
   return JSON.stringify({
     log: { level: 'warn' },
     inbounds: [{ type: 'mixed', listen: '0.0.0.0', listen_port: 7890 }],
@@ -933,6 +990,7 @@ aside h1{font-size:0}}
 <section id="tab-overview">
   <h2>概览</h2>
   <div class="cards" id="cards"></div>
+  <div class="cards" id="funnel" style="margin-top:-6px"></div>
   <div class="card"><div class="k">最近质量趋势（评分）</div><div id="spark" style="margin-top:8px"></div></div>
   <h2 style="margin-top:20px">Top 节点</h2>
   <div id="topNodes"></div>
@@ -1076,7 +1134,20 @@ async function load(){
   const r = await fetch('/api/state'); STATE = await r.json();
   EDIT.entries = JSON.parse(JSON.stringify(STATE.entries||[]));   // 只在加载时初始化
   renderCards(); renderSpark(); renderTop(); renderNodes(); renderSubs(); renderEntries(); fillSettings(); renderPreferred();
-  renderPlanes(); loadTraffic().catch(()=>{});
+  renderPlanes(); loadTraffic().catch(()=>{}); renderFunnel().catch(()=>{});
+}
+async function renderFunnel(){
+  try {
+    const d = await (await fetch('/api/stats')).json();
+    if (!d.ok) return;
+    $('funnel').innerHTML = '<div class="card" style="grid-column:1/-1"><div class="k">节点生成漏斗（为什么“达标”多、“订阅”少）</div>'
+      + '<div style="margin-top:8px;font-size:13px;line-height:2">'
+      + '候选 <b>' + d.candidates + '</b> （数据面 × 优选入口）'
+      + ' → 通过质量门槛 <b class="ok">' + d.passed + '</b>'
+      + ' → 去重(同出口IP) <b class="bad">-' + d.deduped + '</b>'
+      + ' → 最终输出 <b class="ok">' + d.nodes + '</b></div>'
+      + '<div class="dim" style="font-size:12px;margin-top:4px">去重后同一出口 IP 只保留评分最高的一条；这是“订阅比达标数少”的主要原因。</div></div>';
+  } catch(e) {}
 }
 function renderCards(){
   const q = STATE.quality || {}; const arr = Object.values(q);
@@ -1170,7 +1241,7 @@ function renderSubs(){
   ).join('');
   const url = base + '/sub';
   const box = $('qr');
-  box.innerHTML = '<div id="qr-local" style="width:200px;height:200px;background:#fff;border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:center"><style>#qr-local svg{width:100%;height:100%}</style></div>';
+  box.innerHTML = '<div id="qr-local" data-url="'+url+'" style="width:200px;height:200px;background:#fff;border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:center"><style>#qr-local svg{width:100%;height:100%}</style></div>';
   const fallback = () => { box.innerHTML = '<img alt="qr" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:8px" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(url) + '">'; };
   if (window.qrcode) {
     try { const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr-local').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2 }); } catch (e) { fallback(); }
@@ -1253,16 +1324,17 @@ async function importPreferred(btn){
 async function triggerRun(btn){
   return busy(btn, '触发中…', async () => {
     const d = await post('/api/trigger', {});
-    if (d.ok) { toast(d.msg || '已触发测速'); }
-    else if (d.configured === false) { copyText('cd ~/cfmux && ./tools/refresh.sh'); toast('未配置 gh_token，已复制本地命令'); }
-    else { toast('触发失败：' + (d.msg||''), true); }
+    if (d.ok) { toast(d.msg || '已触发测速'); return; }
+    if (d.configured === false) { openTriggerHelp(); return; }
+    toast('触发失败：' + (d.msg||''), true);
   });
 }
-function copyText(txt){
-  try { if (navigator.clipboard) { navigator.clipboard.writeText(txt).catch(()=>{}); return; } } catch(e) {}
-  try { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); } catch(e) {}
+function lastRefresh(){
+  const h = STATE.history || [];
+  if (!h.length) return '暂无记录';
+  const t = new Date(h[h.length-1].ts);
+  return t.toLocaleString();
 }
-
 // ---------- 内核配置 ----------
 function renderPlanes(){
   const sel = $('k-plane'); if (!sel) return;
@@ -1277,7 +1349,8 @@ async function loadKernel(btn){
   $('k-hint').textContent = '读取中…';
   const r = await fetch('/api/kernel?host='+encodeURIComponent(e.host)+'&uuid='+encodeURIComponent(e.uuid));
   const d = await r.json();
-  if (!d.ok) { $('k-hint').textContent='失败: '+(d.msg||''); return toast('读取失败'); }
+  if (btn) { btn.disabled = false; btn.textContent = '读取配置'; }
+  if (!d.ok) { $('k-hint').textContent='失败: '+(d.msg||''); return toast('读取失败', true); }
   const c = d.config;
   $('k-ev').value = c.ev||'no'; $('k-et').value = c.et||'no'; $('k-ex').value = c.ex||'no'; $('k-ech').value = c.ech||'no';
   $('k-d').value = c.d||''; $('k-p').value = c.p||''; $('k-tp').value = c.tp||'';
@@ -1286,14 +1359,12 @@ async function loadKernel(btn){
   $('k-raw').value = JSON.stringify(c, null, 1);
   window.__kbase = c;
   $('k-hint').textContent = '已读取 ' + e.host + ' · ' + new Date().toLocaleTimeString();
-  if (btn) { btn.disabled = false; btn.textContent = '读取配置'; }
   toast('内核配置已读取');
 }
 async function saveKernel(btn){
   const e = planeOf(); if (!e) return toast('没有数据面');
   let cfg;
-  try { cfg = JSON.parse($('k-raw').value); } catch (err) { return toast('原始 JSON 格式错误'); }
-  // 表单值覆盖对应字段
+  try { cfg = JSON.parse($('k-raw').value); } catch (err) { return toast('原始 JSON 格式错误', true); }
   cfg.ev=$('k-ev').value; cfg.et=$('k-et').value; cfg.ex=$('k-ex').value; cfg.ech=$('k-ech').value;
   cfg.d=$('k-d').value; cfg.p=$('k-p').value; cfg.tp=$('k-tp').value;
   cfg.customDNS=$('k-dns').value; cfg.customECHDomain=$('k-echdom').value;
@@ -1307,7 +1378,7 @@ async function saveKernel(btn){
   if (btn) { btn.disabled = false; btn.textContent = '保存到数据面'; }
   $('k-hint').textContent = (d.ok ? '已保存到 ' + e.host : '失败：' + (d.msg||'')) + ' · ' + new Date().toLocaleTimeString();
   toast(d.ok ? ('内核配置已保存：' + (d.msg||'')) : ('内核保存失败：' + (d.msg||'')), !d.ok);
-  if (d.ok) loadKernel();
+  if (d.ok) { window.__kbase = Object.assign({}, base, diff); }
 }
 
 // ---------- 流量统计 ----------
@@ -1322,17 +1393,10 @@ async function loadTraffic(){
   const weekN = days.reduce((a,k)=>a+sumOf(t[k]),0);
   const quota = d.quota || 100000;
   const pct = Math.min(100, Math.round(todayN/quota*1000)/10);
-  const cards = [
-    ['今日请求', todayN.toLocaleString()],
-    ['每日配额', quota.toLocaleString()],
-    ['今日使用率', pct + ' %'],
-    ['近 7 天', weekN.toLocaleString()],
-  ];
+  const cards = [['今日请求', todayN.toLocaleString()], ['每日配额', quota.toLocaleString()], ['今日使用率', pct + ' %'], ['近 7 天', weekN.toLocaleString()]];
   $('t-cards').innerHTML = cards.map(([k,v])=>'<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>').join('')
     + '<div class="card" style="grid-column:1/-1"><div class="k">说明</div><div class="dim" style="font-size:12px;margin-top:6px">'
-    + '本机计数为近似值（Worker 多 isolate 各自累计，最多 5 分钟落一次 KV）；'
-    + '真实账单请以 Cloudflare 控制台为准。配额按每个数据面 10 万/天估算，实际共 ' + (d.entries||0) + ' 个数据面。</div></div>';
-  // 柱状图
+    + '本机计数为近似值（多 isolate 各自累计，5 分钟落一次 KV）；真实账单以 Cloudflare 控制台为准。</div></div>';
   const max = Math.max(1, ...days.map(k=>sumOf(t[k])));
   const w = 620, h = 140, bw = days.length ? (w-20)/days.length-8 : 40;
   const bars = days.map((k,i)=>{
@@ -1343,7 +1407,6 @@ async function loadTraffic(){
       + '<text x="'+(x+bw/2).toFixed(1)+'" y="'+(h-24-bh).toFixed(1)+'" fill="#e6edf7" font-size="9" text-anchor="middle">'+(v>999?(v/1000).toFixed(1)+'k':v)+'</text>';
   }).join('');
   $('t-chart').innerHTML = '<svg width="'+w+'" height="'+h+'" style="max-width:100%">'+bars+'</svg>';
-  // 表格
   const rows = days.slice().reverse().map(k=>{
     const r = t[k];
     return '<tr><td>'+k+'</td><td>'+(r.ws||0)+'</td><td>'+(r.sub||0)+'</td><td>'+(r.other||0)+'</td><td>'+sumOf(r)+'</td></tr>';
@@ -1351,6 +1414,34 @@ async function loadTraffic(){
   $('t-table').innerHTML = days.length
     ? '<table><tr><th>日期</th><th>代理(WS)</th><th>订阅</th><th>其它</th><th>合计</th></tr>'+rows+'</table>'
     : '<div class="dim">暂无数据（产生请求后 5 分钟内会出现）</div>';
+}
+
+function openTriggerHelp(){
+  const cmd = 'cd ~/cfmux && ./tools/refresh.sh';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:100;display:flex;align-items:center;justify-content:center';
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.style.cssText = 'width:640px;max-width:92vw;background:#0f1729';
+  card.innerHTML = '<div class="k">手动测速说明</div>'
+    + '<div class="dim" style="font-size:13px;line-height:1.9;margin-top:10px">'
+    + '测速必须在<b>你自己的网络</b>里跑（Worker 看不到你到 Cloudflare 的链路），两种方式：<br><br>'
+    + '<b class="ok">方式一（推荐，零配置）</b>：在本机终端执行下面命令，跑完自动写回云端：'
+    + '</div>'
+    + '<code style="display:block;padding:10px;margin:8px 0">' + cmd + '</code>'
+    + '<div class="dim" style="font-size:13px">上次刷新：<b>' + lastRefresh() + '</b></div>'
+    + '<div class="dim" style="font-size:13px;line-height:1.9;margin-top:12px">'
+    + '<b class="ok">方式二（一键触发）</b>：配置 GitHub Token 后按钮可直接触发 Actions。<br>'
+    + '需要环境变量 <code>gh_token</code>（PAT，权限 actions:write）与 <code>gh_repo</code>=moneyfly006/cfmux。'
+    + '</div>'
+    + '<div style="margin-top:16px;display:flex;gap:8px">'
+    + '<button class="btn" id="trg-copy">复制命令</button>'
+    + '<button class="btn alt" id="trg-close">关闭</button></div>';
+  wrap.appendChild(card);
+  document.body.appendChild(wrap);
+  card.querySelector('#trg-copy').onclick = function(){ copyText(cmd); toast('命令已复制'); };
+  card.querySelector('#trg-close').onclick = function(){ wrap.remove(); };
+  wrap.onclick = function(ev){ if (ev.target === wrap) wrap.remove(); };
 }
 
 function doAct(el){ act(el.dataset.act, el.dataset.key); }
