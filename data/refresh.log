@@ -184,3 +184,665 @@
 ✅ mux-core-3 @ www.deepl.com              lat= 2175 jit= 751 tput=   42KB/s score= 39.23 B  
 ✅ mux-core-3 @ www.vmware.com             lat= 1283 jit= 902 tput=  159KB/s score= 67.13 A SG/Singapore 
 ✅ mux-core-3 @ www.swowd.com              lat= 1716 jit=1419 tput=  124KB/s score=  57.4 A SG/Singapore 
+✅ mux-core-3 @ www.wuduanyun.com          lat=  407 jit= 486 tput=  171KB/s score= 76.95 S JP/Narita 
+✅ mux-core-3 @ www.wto.org                lat= 1753 jit=1691 tput=   84KB/s score= 50.09 A SG/Singapore 
+✅ mux-core-3 @ www.sloomb.com             lat= 1531 jit= 681 tput=   47KB/s score= 45.47 A  
+
+本轮测 159 可用；合并保留 24 条旧数据；总计 159 条 → /Users/apple/cfmux/data/quality.json
+国家分布 {"US":10,"NL":6,"JP":48,"SG":50,"GB":1}
+[*] 写入 KV …
+{"result":null,"errors":[],"messages":[],"success":true}
+[*] history 已追加: {'ts': 1793294954433, 'ok': 159, 'total': 159, 'avg': 61.1, 'best': 95.4, 'dead': 0}
+[+] 完成：2026-10-30 01:29:16
+[*] 实测清单：45 条（IP + 域名）
+     103.21.244.1
+     104.16.3.1
+     104.17.2.1
+     104.25.1.1
+     188.114.97.1
+     ahrefs.com
+     api.gzcrtw.com
+     auto.dolby.dpdns.org
+     baota.us.kg
+     bbs.alipansou.com
+     cdn.204910.best
+     cdn.555586.xyz
+     cdn.667891.xyz
+     cdn.7zz.cn
+     cdn.cnno.de
+     cdn.ctn32.us.kg
+     cdn.ddeed.de
+     cf.254301.xyz
+     cf.877774.xyz
+     cf.nyanya.moe
+✅ mux-core @ 104.17.2.1                 lat=  788 jit= 168 tput=  212KB/s score= 88.39 S US/East Los Angeles 
+✅ mux-core @ 103.21.244.1               lat=  803 jit= 188 tput=  217KB/s score= 87.67 S US/East Los Angeles 
+✅ mux-core @ ahrefs.com                 lat=  397 jit= 215 tput=  336KB/s score= 90.24 S SG/Singapore 
+✅ mux-core @ api.gzcrtw.com             lat=  332 jit= 235 tput=  441KB/s score= 90.18 S JP/Narita 
+✅ mux-core @ 188.114.97.1               lat= 1107 jit=  65 tput=  169KB/s score=  83.4 S NL/Amsterdam 
+✅ mux-core @ auto.dolby.dpdns.org       lat=  327 jit=  43 tput=  578KB/s score= 95.99 S JP/Narita 
+✅ mux-core @ baota.us.kg                lat=  328 jit= 127 tput=  463KB/s score= 93.46 S JP/Narita 
+✅ mux-core @ bbs.alipansou.com          lat=  335 jit=  70 tput=  650KB/s score= 95.11 S JP/Narita 
+✅ mux-core @ cdn.204910.best            lat=  297 jit=  87 tput=  516KB/s score= 94.92 S JP/Narita 
+✅ mux-core @ cdn.555586.xyz             lat=  395 jit=  49 tput=  443KB/s score= 95.24 S SG/Singapore 
+✅ mux-core @ cdn.7zz.cn                 lat=  281 jit= 113 tput=  496KB/s score= 94.27 S JP/Narita 
+✅ mux-core @ cdn.667891.xyz             lat=  341 jit=  51 tput=  578KB/s score= 95.63 S JP/Narita 
+✅ mux-core @ cdn.ctn32.us.kg            lat=  317 jit=  78 tput=  587KB/s score= 95.02 S JP/Narita 
+✅ mux-core @ cdn.cnno.de                lat=  422 jit=  36 tput=  182KB/s score= 92.25 S SG/Singapore 
+✅ mux-core @ cf.254301.xyz              lat=  393 jit= 163 tput=  161KB/s score= 85.01 S SG/Singapore 
+✅ mux-core @ 104.16.3.1                 lat=  761 jit= 203 tput=  199KB/s score= 87.39 S  
+✅ mux-core @ cdn.ddeed.de               lat=  407 jit=  43 tput=  445KB/s score= 95.32 S SG/Singapore 
+✅ mux-core @ cf.nyanya.moe              lat=  319 jit=  80 tput=  463KB/s score= 94.94 S JP/Narita 
+✅ mux-core @ 104.25.1.1                 lat=  975 jit= 118 tput=  156KB/s score= 80.63 S  
+✅ mux-core @ p.etime.vip                lat=  303 jit= 158 tput=    1KB/s score= 57.91 A JP/Narita 
+✅ mux-core @ mail.notion.com            lat=  420 jit=  53 tput=  245KB/s score= 94.91 S SG/Singapore 
+✅ mux-core @ saas.072159.xyz            lat=  298 jit=  86 tput=  441KB/s score= 94.94 S JP/Narita 
+✅ mux-core @ openai.com                 lat=  393 jit=  72 tput=  469KB/s score= 94.57 S SG/Singapore 
+✅ mux-core @ saas.sin.fan               lat=  298 jit=  89 tput=  639KB/s score= 94.85 S JP/Narita 
+✅ mux-core @ cf.877774.xyz              lat=  326 jit= 195 tput=    0KB/s score= 56.43 A JP/Narita 
+✅ mux-core @ staticdelivery.nexusmods.com lat=  412 jit=  31 tput=  409KB/s score= 95.64 S SG/Singapore 
+✅ mux-core @ versantstore.pearson.com   lat=  428 jit=  72 tput=  431KB/s score= 94.27 S SG/Singapore 
+✅ mux-core @ vps.cheng2001.top          lat=  335 jit= 138 tput=  569KB/s score= 93.07 S JP/Narita 
+❌ mux-core @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ mux-core @ securecircle.com           lat=  394 jit=  79 tput=  430KB/s score= 94.35 S SG/Singapore 
+✅ mux-core @ www.broadcom.com           lat=  411 jit=  40 tput=  403KB/s score= 95.38 S SG/Singapore 
+✅ mux-core @ www.deepl.com              lat=  405 jit=   8 tput=  366KB/s score= 96.39 S SG/Singapore 
+✅ mux-core @ www.galgamex.net           lat=  434 jit=  14 tput=  402KB/s score= 95.96 S SG/Singapore 
+✅ mux-core @ spring.io                  lat=  428 jit=  36 tput=  437KB/s score= 95.35 S SG/Singapore 
+✅ mux-core @ www.giannidelprete.it      lat=  412 jit=  22 tput=  441KB/s score= 95.91 S SG/Singapore 
+✅ mux-core @ www.gov.il                 lat=  397 jit=  97 tput=  320KB/s score= 93.78 S SG/Singapore 
+✅ mux-core @ www.leics.police.uk        lat=  384 jit=  64 tput=  512KB/s score= 94.88 S SG/Singapore 
+✅ mux-core @ stores.staples.com         lat=  406 jit=  44 tput=  469KB/s score=  95.3 S SG/Singapore 
+✅ mux-core @ www.mfyx.cn                lat=  292 jit= 110 tput=  513KB/s score= 94.27 S JP/Narita 
+✅ mux-core @ www.sloomb.com             lat=  411 jit=  15 tput=  399KB/s score= 96.13 S SG/Singapore 
+✅ mux-core @ www.wto.org                lat=  383 jit=  71 tput=  475KB/s score= 94.68 S SG/Singapore 
+✅ mux-core @ www.bangbenjiaju.com       lat=  369 jit=  79 tput=  449KB/s score= 94.56 S SG/Singapore 
+✅ mux-core-2 @ 103.21.244.1               lat=  760 jit= 204 tput=  215KB/s score= 87.55 S US/East Los Angeles 
+✅ mux-core @ www.wuduanyun.com          lat=  386 jit=  31 tput=  480KB/s score= 95.85 S JP/Narita 
+✅ mux-core @ www.swowd.com              lat=  426 jit=  57 tput=  231KB/s score= 94.74 S SG/Singapore 
+✅ mux-core @ www.vmware.com             lat=  420 jit=  40 tput=  470KB/s score=  95.3 S SG/Singapore 
+✅ mux-core-2 @ 104.25.1.1                 lat=  982 jit= 275 tput=  191KB/s score= 81.99 S NL/Amsterdam 
+✅ mux-core-2 @ 188.114.97.1               lat=  987 jit= 197 tput=  227KB/s score= 85.87 S GB/Hounslow 
+✅ mux-core-2 @ 104.17.2.1                 lat=  742 jit= 119 tput=  204KB/s score= 90.25 S US/East Los Angeles 
+✅ mux-core-2 @ ahrefs.com                 lat=  470 jit= 185 tput=  384KB/s score= 90.53 S SG/Singapore 
+✅ mux-core-2 @ api.gzcrtw.com             lat=  355 jit= 182 tput=  431KB/s score= 91.58 S JP/Narita 
+✅ mux-core-2 @ auto.dolby.dpdns.org       lat=  387 jit=  39 tput=  390KB/s score= 95.61 S JP/Narita 
+✅ mux-core-2 @ baota.us.kg                lat=  332 jit= 122 tput=  432KB/s score= 93.57 S JP/Narita 
+✅ mux-core-2 @ bbs.alipansou.com          lat=  420 jit=   6 tput=  402KB/s score= 96.32 S JP/Narita 
+✅ mux-core-2 @ cdn.204910.best            lat=  337 jit= 252 tput=    1KB/s score= 54.81 A JP/Narita 
+✅ mux-core-2 @ cdn.667891.xyz             lat=  351 jit=  72 tput=  411KB/s score= 94.92 S JP/Narita 
+✅ mux-core-2 @ cdn.7zz.cn                 lat=  329 jit= 112 tput=  438KB/s score=  93.9 S JP/Narita 
+✅ mux-core-2 @ cdn.cnno.de                lat=  433 jit=  69 tput=  200KB/s score= 94.32 S SG/Singapore 
+✅ mux-core-2 @ cdn.ctn32.us.kg            lat=  319 jit= 169 tput=    1KB/s score= 57.45 A JP/Narita 
+✅ mux-core-2 @ cdn.555586.xyz             lat=  430 jit=  72 tput=  433KB/s score= 94.26 S SG/Singapore 
+✅ mux-core-2 @ cf.877774.xyz              lat=  286 jit= 122 tput=  509KB/s score= 93.96 S JP/Narita 
+✅ mux-core-2 @ cf.nyanya.moe              lat=  297 jit=   3 tput=  449KB/s score= 97.44 S JP/Narita 
+✅ mux-core-2 @ cdn.ddeed.de               lat=  402 jit=  99 tput=  364KB/s score= 93.68 S SG/Singapore 
+✅ mux-core-2 @ cf.254301.xyz              lat=  397 jit=  77 tput=  160KB/s score= 87.38 S SG/Singapore 
+✅ mux-core-2 @ openai.com                 lat=  408 jit=  42 tput=  432KB/s score= 95.34 S SG/Singapore 
+✅ mux-core-2 @ p.etime.vip                lat=  314 jit=  87 tput=  487KB/s score= 94.77 S JP/Narita 
+✅ mux-core-2 @ saas.072159.xyz            lat=  292 jit=  99 tput=  655KB/s score=  94.6 S JP/Narita 
+✅ mux-core-2 @ saas.sin.fan               lat=  356 jit=  42 tput=  485KB/s score= 95.77 S JP/Narita 
+✅ mux-core-2 @ securecircle.com           lat=  419 jit=  45 tput=  425KB/s score= 95.16 S SG/Singapore 
+✅ mux-core-2 @ 104.16.3.1                 lat=  729 jit= 186 tput=  215KB/s score= 88.35 S  
+✅ mux-core-2 @ spring.io                  lat=  387 jit=  70 tput=  206KB/s score= 94.68 S SG/Singapore 
+✅ mux-core-2 @ stores.staples.com         lat=  407 jit=  40 tput=  382KB/s score= 95.41 S SG/Singapore 
+✅ mux-core-2 @ vps.cheng2001.top          lat=  300 jit=  93 tput=    1KB/s score= 59.89 A JP/Narita 
+❌ mux-core-2 @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ mux-core-2 @ mail.notion.com            lat=  363 jit=  65 tput=  454KB/s score= 95.03 S SG/Singapore 
+✅ mux-core-2 @ www.bangbenjiaju.com       lat=  402 jit=  25 tput=  403KB/s score=  95.9 S SG/Singapore 
+✅ mux-core-2 @ staticdelivery.nexusmods.com lat=  429 jit= 168 tput=  493KB/s score= 91.39 S SG/Singapore 
+✅ mux-core-2 @ www.broadcom.com           lat=  408 jit= 240 tput=  419KB/s score=  89.4 S SG/Singapore 
+✅ mux-core-2 @ www.deepl.com              lat=  394 jit=  22 tput=  434KB/s score= 96.06 S SG/Singapore 
+✅ mux-core-2 @ www.galgamex.net           lat=  412 jit=  32 tput=  427KB/s score= 95.61 S SG/Singapore 
+✅ mux-core-2 @ www.giannidelprete.it      lat=  416 jit=  35 tput=  430KB/s score= 95.48 S SG/Singapore 
+✅ mux-core-2 @ www.mfyx.cn                lat=  298 jit=  25 tput=  504KB/s score= 96.77 S JP/Narita 
+✅ mux-core-2 @ www.gov.il                 lat=  381 jit=  31 tput=  434KB/s score=  95.9 S SG/Singapore 
+✅ mux-core-2 @ www.leics.police.uk        lat=  398 jit=  43 tput=  420KB/s score= 95.39 S SG/Singapore 
+✅ mux-core-2 @ www.sloomb.com             lat=  395 jit=  32 tput=  401KB/s score= 95.75 S SG/Singapore 
+✅ mux-core-2 @ www.swowd.com              lat=  376 jit=  64 tput=  231KB/s score= 94.95 S SG/Singapore 
+✅ mux-core-2 @ www.vmware.com             lat=  409 jit=  99 tput=  347KB/s score= 93.62 S SG/Singapore 
+✅ mux-core-2 @ www.wuduanyun.com          lat=  330 jit= 182 tput=    1KB/s score= 56.97 A JP/Narita 
+✅ mux-core-2 @ www.wto.org                lat=  365 jit=  87 tput=  367KB/s score= 94.35 S SG/Singapore 
+✅ mux-core-2 @ versantstore.pearson.com   lat=  391 jit=  16 tput=  478KB/s score= 96.26 S  
+✅ mux-core-3 @ 103.21.244.1               lat=  826 jit=  97 tput=  235KB/s score= 90.21 S  
+✅ mux-core-3 @ 104.16.3.1                 lat=  768 jit=  73 tput=  238KB/s score= 91.41 S  
+✅ mux-core-3 @ ahrefs.com                 lat=  420 jit= 299 tput=  396KB/s score= 87.53 S SG/Singapore 
+✅ mux-core-3 @ 188.114.97.1               lat=  958 jit= 203 tput=  149KB/s score=    77 S NL/Amsterdam 
+✅ mux-core-3 @ 104.25.1.1                 lat=  908 jit= 231 tput=  194KB/s score= 84.45 S  
+✅ mux-core-3 @ auto.dolby.dpdns.org       lat=  301 jit=  81 tput=  517KB/s score= 95.06 S JP/Narita 
+✅ mux-core-3 @ baota.us.kg                lat=  350 jit=  31 tput=  624KB/s score= 96.15 S JP/Narita 
+✅ mux-core-3 @ cdn.204910.best            lat=  362 jit=  29 tput=  457KB/s score= 96.11 S JP/Narita 
+✅ mux-core-3 @ cdn.555586.xyz             lat=  390 jit=  23 tput=  457KB/s score= 96.06 S SG/Singapore 
+✅ mux-core-3 @ cdn.667891.xyz             lat=  306 jit=  75 tput=  425KB/s score=  95.2 S JP/Narita 
+✅ mux-core-3 @ 104.17.2.1                 lat=  745 jit=  56 tput=  225KB/s score= 92.11 S  
+✅ mux-core-3 @ bbs.alipansou.com          lat=  324 jit=  54 tput=  414KB/s score= 95.68 S JP/Narita 
+✅ mux-core-3 @ cdn.7zz.cn                 lat=  383 jit=  11 tput=  560KB/s score= 96.48 S JP/Narita 
+✅ mux-core-3 @ cdn.ctn32.us.kg            lat=  320 jit=  42 tput=  516KB/s score= 96.07 S JP/Narita 
+✅ mux-core-3 @ cdn.ddeed.de               lat=  410 jit=  52 tput=  443KB/s score= 95.02 S SG/Singapore 
+✅ mux-core-3 @ cf.254301.xyz              lat=  387 jit=  14 tput=  438KB/s score= 96.36 S SG/Singapore 
+✅ mux-core-3 @ cf.877774.xyz              lat=  336 jit=  30 tput=    1KB/s score= 61.48 A JP/Narita 
+✅ mux-core-3 @ cdn.cnno.de                lat=  365 jit=  68 tput=  247KB/s score= 94.92 S US/East Los Angeles 
+✅ mux-core-3 @ api.gzcrtw.com             lat=  380 jit=  82 tput=  587KB/s score= 94.37 S JP/Narita 
+✅ mux-core-3 @ openai.com                 lat=  396 jit=   9 tput=  479KB/s score= 96.43 S SG/Singapore 
+✅ mux-core-3 @ p.etime.vip                lat=  276 jit= 115 tput=  475KB/s score= 94.25 S JP/Narita 
+✅ mux-core-3 @ cf.nyanya.moe              lat=  297 jit=  64 tput=  585KB/s score= 95.61 S JP/Narita 
+✅ mux-core-3 @ saas.sin.fan               lat=  353 jit=  26 tput=    1KB/s score= 61.45 A JP/Narita 
+✅ mux-core-3 @ securecircle.com           lat=  378 jit=  71 tput=  392KB/s score= 94.72 S SG/Singapore 
+✅ mux-core-3 @ staticdelivery.nexusmods.com lat=  402 jit=  56 tput=  464KB/s score= 94.97 S SG/Singapore 
+✅ mux-core-3 @ stores.staples.com         lat=  401 jit=  27 tput=  422KB/s score= 95.85 S SG/Singapore 
+✅ mux-core-3 @ saas.072159.xyz            lat=  340 jit=  59 tput=  494KB/s score=  95.4 S JP/Narita 
+✅ mux-core-3 @ vps.cheng2001.top          lat=  281 jit= 107 tput=  499KB/s score= 94.45 S JP/Narita 
+❌ mux-core-3 @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ mux-core-3 @ www.bangbenjiaju.com       lat=  375 jit= 119 tput=  401KB/s score= 93.31 S SG/Singapore 
+✅ mux-core-3 @ versantstore.pearson.com   lat=  425 jit=  33 tput=  463KB/s score= 95.47 S SG/Singapore 
+✅ mux-core-3 @ www.deepl.com              lat=  404 jit=  29 tput=  448KB/s score= 95.76 S SG/Singapore 
+✅ mux-core-3 @ www.galgamex.net           lat=  366 jit=  78 tput=  443KB/s score= 94.61 S SG/Singapore 
+✅ mux-core-3 @ www.giannidelprete.it      lat=  397 jit=  68 tput=  449KB/s score= 94.65 S SG/Singapore 
+✅ mux-core-3 @ spring.io                  lat=  390 jit=  56 tput=  460KB/s score= 95.07 S SG/Singapore 
+✅ mux-core-3 @ www.broadcom.com           lat=  405 jit=  50 tput=  459KB/s score= 95.13 S SG/Singapore 
+✅ mux-core-3 @ www.gov.il                 lat=  397 jit=  55 tput=  459KB/s score= 95.04 S SG/Singapore 
+✅ mux-core-3 @ www.mfyx.cn                lat=  317 jit= 130 tput=  550KB/s score= 93.46 S JP/Narita 
+✅ mux-core-3 @ www.leics.police.uk        lat=  376 jit= 115 tput=  400KB/s score= 93.42 S SG/Singapore 
+✅ mux-core-3 @ www.swowd.com              lat=  392 jit= 136 tput=  201KB/s score= 92.65 S US/East Los Angeles 
+✅ mux-core-3 @ www.vmware.com             lat=  428 jit=  76 tput=  343KB/s score= 94.15 S SG/Singapore 
+✅ mux-core-3 @ mail.notion.com            lat=  379 jit=  30 tput=  454KB/s score= 95.94 S  
+✅ mux-core-3 @ www.wuduanyun.com          lat=  359 jit=  47 tput=  632KB/s score=  95.6 S JP/Narita 
+✅ mux-core-3 @ www.wto.org                lat=  378 jit=  62 tput=  422KB/s score= 94.99 S SG/Singapore 
+✅ mux-core-3 @ www.sloomb.com             lat=  410 jit=  15 tput=  487KB/s score= 96.13 S  
+
+本轮测 156 可用；合并保留 24 条旧数据；总计 159 条 → /Users/apple/cfmux/data/quality.json
+国家分布 {"US":11,"SG":68,"JP":48,"NL":5,"GB":1}
+[*] 写入 KV …
+{"result":null,"errors":[],"messages":[],"success":true}
+[*] history 已追加: {'ts': 1793302604382, 'ok': 156, 'total': 159, 'avg': 86.6, 'best': 97.4, 'dead': 3}
+[+] 完成：2026-10-30 03:36:46
+[*] 实测清单：45 条（IP + 域名）
+     103.21.244.1
+     104.16.3.1
+     104.17.2.1
+     104.25.1.1
+     188.114.97.1
+     ahrefs.com
+     api.gzcrtw.com
+     auto.dolby.dpdns.org
+     baota.us.kg
+     bbs.alipansou.com
+     cdn.204910.best
+     cdn.555586.xyz
+     cdn.667891.xyz
+     cdn.7zz.cn
+     cdn.cnno.de
+     cdn.ctn32.us.kg
+     cdn.ddeed.de
+     cf.254301.xyz
+     cf.877774.xyz
+     cf.nyanya.moe
+✅ mux-core @ 104.16.3.1                 lat=  709 jit= 231 tput=  222KB/s score= 87.16 S US/East Los Angeles 
+✅ mux-core @ 104.17.2.1                 lat=  814 jit= 135 tput=  214KB/s score= 89.17 S US/East Los Angeles 
+✅ mux-core @ 104.25.1.1                 lat=  859 jit= 158 tput=  193KB/s score= 86.88 S NL/Amsterdam 
+✅ mux-core @ ahrefs.com                 lat=  382 jit= 209 tput=  408KB/s score= 90.55 S SG/Singapore 
+✅ mux-core @ api.gzcrtw.com             lat=  387 jit= 187 tput=  436KB/s score= 91.17 S JP/Narita 
+✅ mux-core @ auto.dolby.dpdns.org       lat=  295 jit= 115 tput=  475KB/s score= 94.09 S JP/Narita 
+✅ mux-core @ bbs.alipansou.com          lat=  320 jit=  60 tput=  601KB/s score= 95.53 S JP/Narita 
+✅ mux-core @ 103.21.244.1               lat=  712 jit= 249 tput=  218KB/s score=  86.6 S US/East Los Angeles 
+✅ mux-core @ cdn.204910.best            lat=  322 jit=  47 tput=  435KB/s score= 95.91 S JP/Narita 
+✅ mux-core @ cdn.667891.xyz             lat=  295 jit= 109 tput=  441KB/s score= 94.27 S JP/Narita 
+✅ mux-core @ baota.us.kg                lat=  367 jit=  44 tput=    1KB/s score=  60.8 A JP/Narita 
+✅ mux-core @ cdn.7zz.cn                 lat=  367 jit=  57 tput=  657KB/s score= 95.23 S JP/Narita 
+✅ mux-core @ cdn.cnno.de                lat=  393 jit=  75 tput=  383KB/s score= 94.48 S SG/Singapore 
+✅ mux-core @ cdn.ctn32.us.kg            lat=  377 jit=  66 tput=  376KB/s score= 94.88 S JP/Narita 
+✅ mux-core @ cdn.ddeed.de               lat=  379 jit= 147 tput=  349KB/s score= 92.43 S SG/Singapore 
+✅ mux-core @ cdn.555586.xyz             lat=  402 jit=  24 tput=  438KB/s score= 95.93 S SG/Singapore 
+✅ mux-core @ cf.254301.xyz              lat=  430 jit= 100 tput=  163KB/s score= 86.94 S SG/Singapore 
+✅ mux-core @ cf.877774.xyz              lat=  338 jit= 100 tput=    1KB/s score= 59.36 A JP/Narita 
+✅ mux-core @ cf.nyanya.moe              lat=  389 jit=  34 tput=  585KB/s score= 95.74 S JP/Narita 
+✅ mux-core @ p.etime.vip                lat=  392 jit=  90 tput=  363KB/s score= 94.03 S JP/Narita 
+✅ mux-core @ saas.072159.xyz            lat=  310 jit= 103 tput=  555KB/s score= 94.33 S JP/Narita 
+✅ mux-core @ saas.sin.fan               lat=  278 jit=  97 tput=  462KB/s score= 94.77 S JP/Narita 
+✅ mux-core @ mail.notion.com            lat=  444 jit=  44 tput=  399KB/s score= 94.98 S SG/Singapore 
+✅ mux-core @ securecircle.com           lat=  391 jit=  29 tput=  443KB/s score= 95.87 S SG/Singapore 
+✅ mux-core @ openai.com                 lat=  390 jit= 110 tput=  356KB/s score= 93.45 S SG/Singapore 
+✅ mux-core @ staticdelivery.nexusmods.com lat=  402 jit=  31 tput=  453KB/s score= 95.72 S SG/Singapore 
+✅ mux-core @ spring.io                  lat=  384 jit=  59 tput=  358KB/s score= 95.03 S SG/Singapore 
+✅ mux-core @ stores.staples.com         lat=  372 jit=  37 tput=  378KB/s score= 95.79 S SG/Singapore 
+✅ mux-core @ versantstore.pearson.com   lat=  444 jit=  53 tput=  379KB/s score= 94.71 S SG/Singapore 
+✅ mux-core @ www.bangbenjiaju.com       lat=  415 jit=  89 tput=  180KB/s score= 90.37 S SG/Singapore 
+✅ mux-core @ www.broadcom.com           lat=  405 jit=  97 tput=  388KB/s score= 93.72 S SG/Singapore 
+✅ mux-core @ www.deepl.com              lat=  401 jit=  30 tput=  424KB/s score= 95.76 S SG/Singapore 
+✅ mux-core @ www.galgamex.net           lat=  383 jit= 193 tput=  422KB/s score= 91.02 S SG/Singapore 
+✅ mux-core @ www.5199dy.com             lat=  415 jit=  64 tput=    0KB/s score= 59.62 A  
+✅ mux-core @ www.giannidelprete.it      lat=  353 jit= 131 tput=  384KB/s score= 93.13 S SG/Singapore 
+✅ mux-core @ www.gov.il                 lat=  393 jit= 242 tput=  414KB/s score= 89.46 S SG/Singapore 
+✅ mux-core @ www.leics.police.uk        lat=  385 jit= 165 tput=  352KB/s score= 91.84 S SG/Singapore 
+✅ mux-core @ www.mfyx.cn                lat=  413 jit=  63 tput=    1KB/s score= 59.84 A JP/Narita 
+✅ mux-core @ www.sloomb.com             lat=  368 jit=  43 tput=  181KB/s score= 92.32 S SG/Singapore 
+✅ mux-core @ www.swowd.com              lat=  708 jit= 309 tput=  483KB/s score= 84.83 S SG/Singapore 
+✅ mux-core @ www.vmware.com             lat=  409 jit=  24 tput=  471KB/s score= 95.87 S SG/Singapore 
+✅ mux-core @ www.wto.org                lat=  390 jit=  52 tput=  434KB/s score= 95.19 S SG/Singapore 
+✅ mux-core @ www.wuduanyun.com          lat=  289 jit= 114 tput=    1KB/s score= 59.35 A JP/Narita 
+✅ mux-core @ vps.cheng2001.top          lat=  337 jit=  98 tput=    0KB/s score= 59.25 A JP/Narita 
+✅ mux-core-2 @ 103.21.244.1               lat=  817 jit= 119 tput=  206KB/s score= 89.62 S US/East Los Angeles 
+✅ mux-core-2 @ 104.17.2.1                 lat=  753 jit= 201 tput=  218KB/s score=  87.7 S US/East Los Angeles 
+✅ mux-core @ 188.114.97.1               lat= 1022 jit= 117 tput=  158KB/s score= 80.62 S  
+✅ mux-core-2 @ 188.114.97.1               lat= 1011 jit=  83 tput=  158KB/s score= 81.74 S NL/Amsterdam 
+✅ mux-core-2 @ 104.16.3.1                 lat=  793 jit=  62 tput=  238KB/s score= 91.53 S US/East Los Angeles 
+✅ mux-core-2 @ auto.dolby.dpdns.org       lat=  328 jit= 154 tput=  464KB/s score= 92.65 S JP/Narita 
+✅ mux-core-2 @ ahrefs.com                 lat=  437 jit= 160 tput=  419KB/s score= 91.56 S SG/Singapore 
+✅ mux-core-2 @ baota.us.kg                lat=  312 jit=  70 tput=  396KB/s score=  95.3 S JP/Narita 
+✅ mux-core-2 @ bbs.alipansou.com          lat=  373 jit=  44 tput=    1KB/s score= 60.75 A JP/Narita 
+✅ mux-core-2 @ cdn.204910.best            lat=  375 jit=  32 tput=  420KB/s score= 95.92 S JP/Narita 
+✅ mux-core-2 @ api.gzcrtw.com             lat=  313 jit= 167 tput=    0KB/s score= 57.38 A JP/Narita 
+✅ mux-core-2 @ cdn.7zz.cn                 lat=  346 jit=  99 tput=  434KB/s score= 94.15 S JP/Narita 
+✅ mux-core-2 @ cdn.667891.xyz             lat=  352 jit=  42 tput=  454KB/s score= 95.81 S JP/Narita 
+✅ mux-core-2 @ cdn.555586.xyz             lat=  398 jit= 172 tput=  394KB/s score= 91.52 S SG/Singapore 
+✅ mux-core-2 @ cdn.ddeed.de               lat=  400 jit=  19 tput=  408KB/s score=  96.1 S SG/Singapore 
+✅ mux-core-2 @ cdn.ctn32.us.kg            lat=  340 jit=  93 tput=    0KB/s score= 59.38 A JP/Narita 
+✅ mux-core-2 @ cf.254301.xyz              lat=  392 jit=  55 tput=  411KB/s score= 95.08 S SG/Singapore 
+✅ mux-core-2 @ cf.877774.xyz              lat=  334 jit= 159 tput=  426KB/s score= 92.45 S JP/Narita 
+✅ mux-core-2 @ cf.nyanya.moe              lat=  375 jit=  32 tput=  367KB/s score= 95.92 S JP/Narita 
+✅ mux-core-2 @ mail.notion.com            lat=  441 jit=  33 tput=  340KB/s score= 95.34 S SG/Singapore 
+✅ mux-core-2 @ openai.com                 lat=  464 jit=  31 tput=  412KB/s score=  95.2 S SG/Singapore 
+✅ mux-core-2 @ p.etime.vip                lat=  371 jit=  22 tput=    1KB/s score= 61.42 A JP/Narita 
+✅ mux-core-2 @ saas.sin.fan               lat=  340 jit=  48 tput=    1KB/s score=  60.9 A JP/Narita 
+✅ mux-core-2 @ securecircle.com           lat=  380 jit=  37 tput=  439KB/s score= 95.72 S SG/Singapore 
+✅ mux-core-2 @ cdn.cnno.de                lat=  379 jit=  77 tput=  398KB/s score= 94.53 S  
+✅ mux-core-2 @ 104.25.1.1                 lat= 1017 jit= 231 tput=  200KB/s score=  84.6 S  
+✅ mux-core-2 @ saas.072159.xyz            lat=  336 jit=  78 tput=  522KB/s score= 94.86 S JP/Narita 
+✅ mux-core-2 @ staticdelivery.nexusmods.com lat=  405 jit=  36 tput=  440KB/s score= 95.55 S SG/Singapore 
+✅ mux-core-2 @ stores.staples.com         lat=  400 jit=  11 tput=  441KB/s score= 96.34 S SG/Singapore 
+✅ mux-core-2 @ versantstore.pearson.com   lat=  397 jit=  47 tput=  391KB/s score= 95.28 S SG/Singapore 
+✅ mux-core-2 @ www.bangbenjiaju.com       lat=  368 jit=  50 tput=  426KB/s score= 95.43 S SG/Singapore 
+✅ mux-core-2 @ spring.io                  lat=  381 jit=  64 tput=  412KB/s score= 94.91 S SG/Singapore 
+✅ mux-core-2 @ www.broadcom.com           lat=  397 jit=  17 tput=  503KB/s score= 96.18 S SG/Singapore 
+✅ mux-core-2 @ www.deepl.com              lat=  370 jit=  97 tput=  392KB/s score= 94.01 S SG/Singapore 
+✅ mux-core-2 @ www.galgamex.net           lat=  423 jit=  34 tput=  425KB/s score= 95.46 S SG/Singapore 
+✅ mux-core-2 @ www.giannidelprete.it      lat=  393 jit=  14 tput=  473KB/s score= 96.31 S SG/Singapore 
+✅ mux-core-2 @ www.gov.il                 lat=  367 jit=  88 tput=  468KB/s score=  94.3 S SG/Singapore 
+✅ mux-core-2 @ vps.cheng2001.top          lat=  326 jit=  50 tput=    0KB/s score= 60.78 A JP/Narita 
+✅ mux-core-2 @ www.leics.police.uk        lat=  384 jit=  41 tput=  413KB/s score= 95.57 S SG/Singapore 
+✅ mux-core-2 @ www.mfyx.cn                lat=  305 jit=  39 tput=  541KB/s score= 96.29 S JP/Narita 
+✅ mux-core-2 @ www.vmware.com             lat=  407 jit=  70 tput=  392KB/s score= 94.51 S SG/Singapore 
+✅ mux-core-2 @ www.wto.org                lat=  394 jit= 126 tput=  363KB/s score= 92.94 S SG/Singapore 
+✅ mux-core-2 @ www.wuduanyun.com          lat=  297 jit= 137 tput=  408KB/s score= 93.42 S JP/Narita 
+✅ mux-core-2 @ www.5199dy.com             lat=  376 jit=  57 tput=    0KB/s score= 60.16 A  
+✅ mux-core-3 @ 103.21.244.1               lat=  815 jit=  75 tput=  222KB/s score= 90.96 S US/East Los Angeles 
+✅ mux-core-2 @ www.swowd.com              lat=  637 jit= 229 tput=    0KB/s score= 52.82 A SG/Singapore 
+✅ mux-core-2 @ www.sloomb.com             lat=  427 jit=  14 tput=  443KB/s score= 96.02 S SG/Singapore 
+✅ mux-core-3 @ 104.25.1.1                 lat=  927 jit= 156 tput=  142KB/s score= 77.44 S NL/Amsterdam 
+✅ mux-core-3 @ 188.114.97.1               lat=  851 jit=4221 tput=  179KB/s score= 74.23 S NL/Amsterdam 
+✅ mux-core-3 @ ahrefs.com                 lat=  437 jit= 155 tput=  362KB/s score= 91.71 S SG/Singapore 
+✅ mux-core-3 @ api.gzcrtw.com             lat=  452 jit=  89 tput=  356KB/s score= 93.56 S JP/Narita 
+✅ mux-core-3 @ baota.us.kg                lat=  331 jit= 163 tput=  383KB/s score= 92.35 S JP/Narita 
+✅ mux-core-3 @ bbs.alipansou.com          lat=  320 jit= 189 tput=  568KB/s score= 91.66 S JP/Narita 
+✅ mux-core-3 @ cdn.204910.best            lat=  352 jit= 161 tput=  574KB/s score= 92.24 S JP/Narita 
+✅ mux-core-3 @ cdn.555586.xyz             lat=  377 jit=  82 tput=  476KB/s score=  94.4 S SG/Singapore 
+✅ mux-core-3 @ auto.dolby.dpdns.org       lat=  335 jit= 176 tput=    0KB/s score= 56.93 A JP/Narita 
+✅ mux-core-3 @ cdn.667891.xyz             lat=  290 jit=  97 tput=    1KB/s score= 59.85 A JP/Narita 
+✅ mux-core-3 @ cdn.7zz.cn                 lat=  395 jit=  16 tput=  488KB/s score= 96.23 S JP/Narita 
+✅ mux-core-3 @ cdn.cnno.de                lat=  393 jit=   6 tput=  430KB/s score= 96.54 S SG/Singapore 
+✅ mux-core-3 @ cdn.ctn32.us.kg            lat=  321 jit=  19 tput=  427KB/s score= 96.76 S JP/Narita 
+✅ mux-core-3 @ cdn.ddeed.de               lat=  408 jit=  23 tput=  465KB/s score= 95.91 S SG/Singapore 
+✅ mux-core-3 @ cf.254301.xyz              lat=  398 jit=  54 tput=  429KB/s score= 95.06 S SG/Singapore 
+✅ mux-core-3 @ cf.nyanya.moe              lat=  348 jit=  61 tput=  573KB/s score= 95.27 S JP/Narita 
+✅ mux-core-3 @ mail.notion.com            lat=  359 jit=  30 tput=  452KB/s score= 96.11 S SG/Singapore 
+✅ mux-core-3 @ cf.877774.xyz              lat=  293 jit= 103 tput=  433KB/s score= 94.47 S JP/Narita 
+✅ mux-core-3 @ p.etime.vip                lat=  293 jit= 140 tput=  448KB/s score= 93.36 S JP/Narita 
+✅ mux-core-3 @ saas.072159.xyz            lat=  335 jit=  40 tput=  559KB/s score= 96.01 S JP/Narita 
+✅ mux-core-3 @ openai.com                 lat=  408 jit=  60 tput=    0KB/s score=  59.8 A SG/Singapore 
+✅ mux-core-3 @ securecircle.com           lat=  393 jit=  78 tput=  432KB/s score= 94.39 S SG/Singapore 
+✅ mux-core-3 @ spring.io                  lat=  397 jit=  48 tput=  459KB/s score= 95.25 S SG/Singapore 
+✅ mux-core-3 @ staticdelivery.nexusmods.com lat=  406 jit=  86 tput=  384KB/s score= 94.04 S SG/Singapore 
+✅ mux-core-3 @ saas.sin.fan               lat=  262 jit= 134 tput=  377KB/s score=  93.8 S JP/Narita 
+✅ mux-core-3 @ stores.staples.com         lat=  390 jit=  91 tput=  393KB/s score= 94.02 S SG/Singapore 
+✅ mux-core-3 @ versantstore.pearson.com   lat=  422 jit= 131 tput=  346KB/s score= 92.55 S SG/Singapore 
+✅ mux-core-3 @ www.5199dy.com             lat=  391 jit=  56 tput=    0KB/s score= 60.06 A JP/Narita 
+✅ mux-core-3 @ 104.16.3.1                 lat=  706 jit= 217 tput=  202KB/s score= 87.61 S  
+✅ mux-core-3 @ www.bangbenjiaju.com       lat=  420 jit=  92 tput=  404KB/s score= 93.74 S SG/Singapore 
+✅ mux-core-3 @ 104.17.2.1                 lat=  793 jit= 146 tput=  207KB/s score= 89.01 S  
+✅ mux-core-3 @ vps.cheng2001.top          lat=  324 jit=  62 tput=    0KB/s score= 60.44 A JP/Narita 
+✅ mux-core-3 @ www.galgamex.net           lat=  403 jit= 116 tput=  412KB/s score= 93.16 S SG/Singapore 
+✅ mux-core-3 @ www.giannidelprete.it      lat=  462 jit=  48 tput=  451KB/s score= 94.71 S SG/Singapore 
+✅ mux-core-3 @ www.gov.il                 lat=  392 jit= 144 tput=  390KB/s score= 92.41 S SG/Singapore 
+✅ mux-core-3 @ www.broadcom.com           lat=  416 jit=  34 tput=  456KB/s score= 95.51 S SG/Singapore 
+✅ mux-core-3 @ www.mfyx.cn                lat=  367 jit=  39 tput=  450KB/s score= 95.77 S JP/Narita 
+✅ mux-core-3 @ www.deepl.com              lat=  400 jit=  82 tput=  388KB/s score= 94.21 S SG/Singapore 
+✅ mux-core-3 @ www.sloomb.com             lat=  393 jit=  46 tput=  446KB/s score= 95.35 S SG/Singapore 
+✅ mux-core-3 @ www.wto.org                lat=  356 jit=  59 tput=  466KB/s score= 95.26 S SG/Singapore 
+✅ mux-core-3 @ www.swowd.com              lat=  735 jit= 253 tput=  204KB/s score= 86.29 S SG/Singapore 
+✅ mux-core-3 @ www.wuduanyun.com          lat=  378 jit=  21 tput=    1KB/s score=  61.4 A JP/Narita 
+✅ mux-core-3 @ www.leics.police.uk        lat=  388 jit=  77 tput=  429KB/s score= 94.46 S SG/Singapore 
+✅ mux-core-3 @ www.vmware.com             lat=  378 jit=  48 tput=  416KB/s score= 95.41 S SG/Singapore 
+
+本轮测 159 可用；合并保留 24 条旧数据；总计 159 条 → /Users/apple/cfmux/data/quality.json
+国家分布 {"US":12,"NL":6,"SG":72,"JP":49}
+[*] 写入 KV …
+{"result":null,"errors":[],"messages":[],"success":true}
+[*] history 已追加: {'ts': 1793310096014, 'ok': 159, 'total': 159, 'avg': 83.8, 'best': 96.8, 'dead': 0}
+[+] 完成：2026-10-30 05:41:37
+[*] 实测清单：45 条（IP + 域名）
+     103.21.244.1
+     104.16.3.1
+     104.17.2.1
+     104.25.1.1
+     188.114.97.1
+     ahrefs.com
+     api.gzcrtw.com
+     auto.dolby.dpdns.org
+     baota.us.kg
+     bbs.alipansou.com
+     cdn.204910.best
+     cdn.555586.xyz
+     cdn.667891.xyz
+     cdn.7zz.cn
+     cdn.cnno.de
+     cdn.ctn32.us.kg
+     cdn.ddeed.de
+     cf.254301.xyz
+     cf.877774.xyz
+     cf.nyanya.moe
+✅ mux-core @ 104.25.1.1                 lat=  809 jit=  82 tput=  194KB/s score= 89.75 S NL/Amsterdam 
+✅ mux-core @ 188.114.97.1               lat=  755 jit= 360 tput=  190KB/s score= 81.16 S NL/Amsterdam 
+✅ mux-core @ ahrefs.com                 lat=  404 jit= 157 tput=  448KB/s score= 91.92 S SG/Singapore 
+✅ mux-core @ api.gzcrtw.com             lat=  335 jit= 208 tput=  621KB/s score= 90.97 S JP/Narita 
+✅ mux-core @ auto.dolby.dpdns.org       lat=  316 jit=  75 tput=    1KB/s score= 60.29 A JP/Narita 
+✅ mux-core @ baota.us.kg                lat=  309 jit=  89 tput=  451KB/s score= 94.76 S JP/Narita 
+✅ mux-core @ bbs.alipansou.com          lat=  324 jit=  74 tput=  487KB/s score= 95.08 S JP/Narita 
+✅ mux-core @ cdn.204910.best            lat=  339 jit=  74 tput=  547KB/s score= 94.96 S JP/Narita 
+✅ mux-core @ cdn.555586.xyz             lat=  382 jit=  43 tput=  429KB/s score= 95.53 S SG/Singapore 
+✅ mux-core @ cdn.667891.xyz             lat=  311 jit=  93 tput=  624KB/s score= 94.62 S JP/Narita 
+✅ mux-core @ 103.21.244.1               lat=  810 jit= 173 tput=  194KB/s score= 87.01 S  
+✅ mux-core @ cdn.7zz.cn                 lat=  315 jit=  66 tput=  637KB/s score=  95.4 S JP/Narita 
+✅ mux-core @ cdn.ctn32.us.kg            lat=  268 jit= 100 tput=    1KB/s score= 59.94 A JP/Narita 
+✅ mux-core @ cdn.ddeed.de               lat=  408 jit= 189 tput=  432KB/s score= 90.93 S SG/Singapore 
+✅ mux-core @ cf.254301.xyz              lat=  382 jit=  90 tput=  417KB/s score= 94.12 S SG/Singapore 
+✅ mux-core @ 104.17.2.1                 lat=  786 jit= 234 tput=  209KB/s score= 86.43 S  
+✅ mux-core @ cf.nyanya.moe              lat=  293 jit= 154 tput=    1KB/s score= 58.11 A JP/Narita 
+✅ mux-core @ mail.notion.com            lat=  365 jit=  91 tput=  377KB/s score= 94.23 S SG/Singapore 
+✅ mux-core @ openai.com                 lat=  379 jit=  27 tput=  422KB/s score= 96.03 S SG/Singapore 
+✅ mux-core @ 104.16.3.1                 lat=  825 jit= 123 tput=  236KB/s score= 89.44 S  
+✅ mux-core @ saas.072159.xyz            lat=  380 jit=  50 tput=    1KB/s score= 60.51 A JP/Narita 
+✅ mux-core @ saas.sin.fan               lat=  324 jit=  58 tput=    1KB/s score= 60.73 A JP/Narita 
+✅ mux-core @ securecircle.com           lat=  399 jit=  63 tput=  403KB/s score= 94.79 S SG/Singapore 
+✅ mux-core @ spring.io                  lat=  402 jit=  89 tput=  448KB/s score= 93.98 S SG/Singapore 
+✅ mux-core @ cf.877774.xyz              lat=  322 jit= 130 tput=  586KB/s score= 93.42 S JP/Narita 
+✅ mux-core @ stores.staples.com         lat=  399 jit=  98 tput=  407KB/s score= 93.74 S SG/Singapore 
+✅ mux-core @ p.etime.vip                lat=  310 jit=  50 tput=  564KB/s score= 95.92 S JP/Narita 
+✅ mux-core @ staticdelivery.nexusmods.com lat=  401 jit=  71 tput=  472KB/s score= 94.53 S SG/Singapore 
+✅ mux-core @ vps.cheng2001.top          lat=  269 jit=  52 tput=  417KB/s score=  96.2 S JP/Narita 
+❌ mux-core @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ mux-core @ www.broadcom.com           lat=  393 jit=  20 tput=  372KB/s score= 96.13 S SG/Singapore 
+✅ mux-core @ www.deepl.com              lat=  404 jit=  10 tput=  423KB/s score= 96.33 S SG/Singapore 
+✅ mux-core @ www.galgamex.net           lat=  397 jit=  33 tput=  378KB/s score=  95.7 S SG/Singapore 
+✅ mux-core @ www.giannidelprete.it      lat=  391 jit=  36 tput=  422KB/s score= 95.66 S SG/Singapore 
+✅ mux-core @ www.gov.il                 lat=  386 jit= 175 tput=  425KB/s score= 91.53 S SG/Singapore 
+✅ mux-core @ versantstore.pearson.com   lat=  383 jit=  49 tput=  377KB/s score= 95.34 S SG/Singapore 
+✅ mux-core @ www.mfyx.cn                lat=  323 jit=  67 tput=  438KB/s score=  95.3 S JP/Narita 
+✅ mux-core @ www.leics.police.uk        lat=  411 jit=  60 tput=  417KB/s score= 94.78 S SG/Singapore 
+✅ mux-core @ www.sloomb.com             lat=  399 jit=  60 tput=  445KB/s score= 94.88 S SG/Singapore 
+✅ mux-core @ www.swowd.com              lat=  370 jit=  52 tput=  213KB/s score= 95.36 S SG/Singapore 
+✅ mux-core @ www.bangbenjiaju.com       lat=  376 jit=  59 tput=  435KB/s score=  95.1 S SG/Singapore 
+✅ mux-core @ www.vmware.com             lat=  409 jit=  53 tput=  429KB/s score=    95 S SG/Singapore 
+✅ mux-core @ www.wuduanyun.com          lat=  330 jit=  89 tput=  480KB/s score= 94.58 S JP/Narita 
+✅ mux-core @ cdn.cnno.de                lat=  804 jit= 125 tput=  183KB/s score= 86.57 S  
+✅ mux-core-2 @ 104.16.3.1                 lat=  803 jit=  72 tput=  230KB/s score= 91.15 S US/East Los Angeles 
+✅ mux-core @ www.wto.org                lat=  408 jit=  34 tput=  418KB/s score= 95.58 S SG/Singapore 
+✅ mux-core-2 @ 104.25.1.1                 lat= 1007 jit= 257 tput=  188KB/s score=  81.8 S NL/Amsterdam 
+✅ mux-core-2 @ 188.114.97.1               lat=  922 jit= 188 tput=  161KB/s score= 79.85 S NL/Amsterdam 
+✅ mux-core-2 @ ahrefs.com                 lat=  391 jit= 159 tput=  433KB/s score= 91.97 S SG/Singapore 
+✅ mux-core-2 @ api.gzcrtw.com             lat=  363 jit= 124 tput=  459KB/s score= 93.26 S JP/Narita 
+✅ mux-core-2 @ auto.dolby.dpdns.org       lat=  312 jit=  91 tput=  445KB/s score= 94.67 S JP/Narita 
+✅ mux-core-2 @ baota.us.kg                lat=  301 jit= 111 tput=  563KB/s score= 94.16 S JP/Narita 
+✅ mux-core-2 @ cdn.204910.best            lat=  371 jit=  64 tput=  524KB/s score= 94.99 S JP/Narita 
+✅ mux-core-2 @ cdn.555586.xyz             lat=  384 jit=  39 tput=  453KB/s score= 95.63 S SG/Singapore 
+✅ mux-core-2 @ cdn.667891.xyz             lat=  354 jit=  48 tput=  592KB/s score= 95.61 S JP/Narita 
+✅ mux-core-2 @ bbs.alipansou.com          lat=  372 jit=  36 tput=  484KB/s score= 95.82 S JP/Narita 
+✅ mux-core-2 @ cdn.7zz.cn                 lat=  355 jit=  44 tput=  476KB/s score= 95.72 S JP/Narita 
+✅ mux-core-2 @ cdn.ctn32.us.kg            lat=  358 jit=  32 tput=    1KB/s score= 61.23 A JP/Narita 
+✅ mux-core-2 @ cdn.cnno.de                lat=  748 jit= 127 tput=  227KB/s score= 89.96 S US/East Los Angeles 
+✅ mux-core-2 @ cf.254301.xyz              lat=  398 jit=  26 tput=  453KB/s score=  95.9 S SG/Singapore 
+✅ mux-core-2 @ cdn.ddeed.de               lat=  389 jit=  57 tput=  436KB/s score= 95.05 S SG/Singapore 
+✅ mux-core-2 @ cf.877774.xyz              lat=  303 jit= 100 tput=  457KB/s score= 94.48 S JP/Narita 
+✅ mux-core-2 @ 103.21.244.1               lat=  829 jit= 141 tput=  206KB/s score= 88.86 S  
+✅ mux-core-2 @ cf.nyanya.moe              lat=  342 jit=  48 tput=  557KB/s score= 95.71 S JP/Narita 
+✅ mux-core-2 @ mail.notion.com            lat=  391 jit=  47 tput=  422KB/s score= 95.33 S SG/Singapore 
+✅ mux-core-2 @ 104.17.2.1                 lat=  790 jit=  77 tput=  195KB/s score= 90.23 S  
+✅ mux-core-2 @ saas.sin.fan               lat=  376 jit=  37 tput=  488KB/s score= 95.76 S JP/Narita 
+✅ mux-core-2 @ p.etime.vip                lat=  337 jit=  71 tput=  464KB/s score= 95.06 S JP/Narita 
+✅ mux-core-2 @ securecircle.com           lat=  384 jit=  86 tput=  357KB/s score= 94.22 S SG/Singapore 
+✅ mux-core-2 @ staticdelivery.nexusmods.com lat=  402 jit=  31 tput=  453KB/s score= 95.72 S SG/Singapore 
+✅ mux-core-2 @ openai.com                 lat=  363 jit=  46 tput=  425KB/s score=  95.6 S SG/Singapore 
+✅ mux-core-2 @ saas.072159.xyz            lat=  321 jit= 107 tput=  644KB/s score= 94.12 S JP/Narita 
+✅ mux-core-2 @ stores.staples.com         lat=  393 jit=  75 tput=  317KB/s score= 94.48 S SG/Singapore 
+❌ mux-core-2 @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ mux-core-2 @ www.bangbenjiaju.com       lat=  364 jit=  71 tput=  420KB/s score= 94.84 S SG/Singapore 
+✅ mux-core-2 @ spring.io                  lat=  389 jit=  47 tput=  425KB/s score= 95.35 S SG/Singapore 
+✅ mux-core-2 @ www.broadcom.com           lat=  362 jit=  81 tput=  154KB/s score=  86.5 S SG/Singapore 
+✅ mux-core-2 @ www.deepl.com              lat=  357 jit=  80 tput=  442KB/s score= 94.63 S SG/Singapore 
+✅ mux-core-2 @ vps.cheng2001.top          lat=  376 jit=  58 tput=  440KB/s score= 95.13 S JP/Narita 
+✅ mux-core-2 @ www.galgamex.net           lat=  410 jit=  19 tput=  279KB/s score= 96.01 S SG/Singapore 
+✅ mux-core-2 @ versantstore.pearson.com   lat=  478 jit= 492 tput=  476KB/s score= 81.26 S SG/Singapore 
+✅ mux-core-2 @ www.giannidelprete.it      lat=  401 jit=  54 tput=  405KB/s score= 95.04 S SG/Singapore 
+✅ mux-core-2 @ www.gov.il                 lat=  396 jit=  35 tput=  458KB/s score= 95.65 S SG/Singapore 
+✅ mux-core-2 @ www.mfyx.cn                lat=  365 jit=  31 tput=    1KB/s score=  61.2 A JP/Narita 
+✅ mux-core-2 @ www.leics.police.uk        lat=  376 jit=  37 tput=  424KB/s score= 95.76 S SG/Singapore 
+✅ mux-core-2 @ www.sloomb.com             lat=  412 jit=  39 tput=  360KB/s score=  95.4 S SG/Singapore 
+✅ mux-core-2 @ www.wuduanyun.com          lat=  296 jit=  70 tput=  491KB/s score= 95.43 S JP/Narita 
+✅ mux-core-2 @ www.swowd.com              lat=  373 jit=  79 tput=  185KB/s score=  91.9 S SG/Singapore 
+✅ mux-core-2 @ www.vmware.com             lat=  414 jit=  33 tput=  429KB/s score= 95.56 S SG/Singapore 
+✅ mux-core-3 @ 103.21.244.1               lat=  854 jit=  61 tput=  194KB/s score=    90 S US/East Los Angeles 
+✅ mux-core-2 @ www.wto.org                lat=  413 jit=  10 tput=  433KB/s score= 96.26 S SG/Singapore 
+✅ mux-core-3 @ 104.25.1.1                 lat=  836 jit= 382 tput=  174KB/s score= 77.02 S NL/Amsterdam 
+✅ mux-core-3 @ 188.114.97.1               lat=  824 jit= 219 tput=  201KB/s score= 86.56 S NL/Amsterdam 
+✅ mux-core-3 @ ahrefs.com                 lat=  450 jit= 189 tput=  401KB/s score= 90.58 S SG/Singapore 
+✅ mux-core-3 @ api.gzcrtw.com             lat=  364 jit= 102 tput=  674KB/s score= 93.91 S JP/Narita 
+✅ mux-core-3 @ auto.dolby.dpdns.org       lat=  322 jit=  73 tput=  414KB/s score= 95.13 S JP/Narita 
+✅ mux-core-3 @ bbs.alipansou.com          lat=  288 jit= 199 tput=  513KB/s score= 91.63 S JP/Narita 
+✅ mux-core-3 @ cdn.204910.best            lat=  368 jit=  24 tput=    1KB/s score= 61.39 A JP/Narita 
+✅ mux-core-3 @ cdn.555586.xyz             lat=  391 jit=  35 tput=  448KB/s score= 95.69 S SG/Singapore 
+✅ mux-core-3 @ cdn.667891.xyz             lat=  289 jit=  89 tput=  565KB/s score= 94.92 S JP/Narita 
+✅ mux-core-3 @ baota.us.kg                lat=  309 jit=  84 tput=  506KB/s score= 94.91 S JP/Narita 
+✅ mux-core-3 @ cdn.7zz.cn                 lat=  309 jit=  96 tput=  469KB/s score= 94.55 S JP/Narita 
+✅ mux-core-3 @ cdn.ctn32.us.kg            lat=  295 jit=  31 tput=  489KB/s score= 96.61 S JP/Narita 
+✅ mux-core-3 @ cdn.ddeed.de               lat=  404 jit=  45 tput=  423KB/s score= 95.28 S SG/Singapore 
+✅ mux-core-3 @ 104.16.3.1                 lat=  851 jit=  85 tput=  197KB/s score= 89.83 S  
+✅ mux-core-3 @ cf.877774.xyz              lat=  373 jit=  11 tput=    1KB/s score= 61.74 A JP/Narita 
+✅ mux-core-3 @ cf.254301.xyz              lat=  383 jit=  61 tput=  400KB/s score= 94.98 S SG/Singapore 
+✅ mux-core-3 @ cf.nyanya.moe              lat=  311 jit= 139 tput=    1KB/s score= 58.41 A JP/Narita 
+✅ mux-core-3 @ mail.notion.com            lat=  408 jit=  17 tput=  428KB/s score= 96.09 S SG/Singapore 
+✅ mux-core-3 @ openai.com                 lat=  383 jit=  87 tput=  427KB/s score=  94.2 S SG/Singapore 
+✅ mux-core-3 @ saas.072159.xyz            lat=  287 jit=  69 tput=  427KB/s score= 95.54 S JP/Narita 
+✅ mux-core-3 @ saas.sin.fan               lat=  294 jit= 101 tput=  484KB/s score= 94.52 S JP/Narita 
+✅ mux-core-3 @ securecircle.com           lat=  383 jit=  72 tput=  451KB/s score= 94.65 S SG/Singapore 
+✅ mux-core-3 @ 104.17.2.1                 lat=  844 jit= 131 tput=  188KB/s score= 86.94 S  
+✅ mux-core-3 @ p.etime.vip                lat=  285 jit=  95 tput=    1KB/s score= 59.95 A JP/Narita 
+✅ mux-core-3 @ stores.staples.com         lat=  385 jit=  27 tput=  481KB/s score= 95.98 S SG/Singapore 
+✅ mux-core-3 @ versantstore.pearson.com   lat=  406 jit=  73 tput=  401KB/s score= 94.43 S SG/Singapore 
+✅ mux-core-3 @ vps.cheng2001.top          lat=  315 jit=  61 tput=  453KB/s score= 95.55 S JP/Narita 
+❌ mux-core-3 @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ mux-core-3 @ www.bangbenjiaju.com       lat=  380 jit=  70 tput=  460KB/s score= 94.73 S SG/Singapore 
+✅ mux-core-3 @ www.broadcom.com           lat=  360 jit=  99 tput=  411KB/s score= 94.03 S SG/Singapore 
+✅ mux-core-3 @ www.deepl.com              lat=  377 jit=  39 tput=  424KB/s score= 95.69 S SG/Singapore 
+✅ mux-core-3 @ spring.io                  lat=  397 jit=  25 tput=  485KB/s score= 95.94 S SG/Singapore 
+✅ mux-core-3 @ www.galgamex.net           lat=  382 jit=  34 tput=  460KB/s score=  95.8 S SG/Singapore 
+✅ mux-core-3 @ staticdelivery.nexusmods.com lat=  406 jit=  29 tput=  408KB/s score= 95.75 S SG/Singapore 
+✅ mux-core-3 @ www.giannidelprete.it      lat=  376 jit=  61 tput=  441KB/s score= 95.04 S SG/Singapore 
+✅ mux-core-3 @ www.gov.il                 lat=  388 jit=  35 tput=  479KB/s score= 95.72 S SG/Singapore 
+✅ mux-core-3 @ www.leics.police.uk        lat=  391 jit=  37 tput=  439KB/s score= 95.63 S SG/Singapore 
+✅ mux-core-3 @ www.mfyx.cn                lat=  364 jit=  89 tput=  479KB/s score=  94.3 S JP/Narita 
+✅ mux-core-3 @ www.sloomb.com             lat=  389 jit=  93 tput=  167KB/s score= 88.19 S SG/Singapore 
+✅ mux-core-3 @ www.vmware.com             lat=  381 jit=  56 tput=  444KB/s score= 95.15 S SG/Singapore 
+✅ mux-core-3 @ www.swowd.com              lat=  403 jit=  41 tput=  163KB/s score= 88.94 S SG/Singapore 
+✅ mux-core-3 @ www.wto.org                lat=  391 jit=  33 tput=  513KB/s score= 95.75 S SG/Singapore 
+✅ mux-core-3 @ www.wuduanyun.com          lat=  322 jit=  60 tput=  425KB/s score= 95.52 S JP/Narita 
+✅ mux-core-3 @ cdn.cnno.de                lat=  779 jit= 193 tput=  208KB/s score= 87.72 S  
+
+本轮测 156 可用；合并保留 24 条旧数据；总计 159 条 → /Users/apple/cfmux/data/quality.json
+国家分布 {"NL":8,"SG":70,"JP":48,"US":8}
+[*] 写入 KV …
+{"result":null,"errors":[],"messages":[],"success":true}
+[*] history 已追加: {'ts': 1793317662746, 'ok': 156, 'total': 159, 'avg': 85.8, 'best': 96.6, 'dead': 3}
+[+] 完成：2026-10-30 07:47:44
+[*] 实测清单：45 条（IP + 域名）
+     103.21.244.1
+     104.16.3.1
+     104.17.2.1
+     104.25.1.1
+     188.114.97.1
+     ahrefs.com
+     api.gzcrtw.com
+     auto.dolby.dpdns.org
+     baota.us.kg
+     bbs.alipansou.com
+     cdn.204910.best
+     cdn.555586.xyz
+     cdn.667891.xyz
+     cdn.7zz.cn
+     cdn.cnno.de
+     cdn.ctn32.us.kg
+     cdn.ddeed.de
+     cf.254301.xyz
+     cf.877774.xyz
+     cf.nyanya.moe
+✅ mux-core @ 104.25.1.1                 lat=  906 jit= 249 tput=  156KB/s score= 77.28 S NL/Amsterdam 
+✅ mux-core @ 103.21.244.1               lat= 1240 jit=1654 tput=   71KB/s score= 52.09 A US/East Los Angeles 
+✅ mux-core @ ahrefs.com                 lat=  485 jit=1151 tput=  101KB/s score= 63.63 A SG/Singapore 
+✅ mux-core @ 188.114.97.1               lat=  982 jit=  82 tput=  176KB/s score= 85.16 S NL/Amsterdam 
+✅ mux-core @ 104.17.2.1                 lat=  868 jit= 193 tput=  179KB/s score=  83.3 S US/East Los Angeles 
+✅ mux-core @ auto.dolby.dpdns.org       lat=  396 jit=  60 tput=    0KB/s score=  59.9 A JP/Narita 
+✅ mux-core @ 104.16.3.1                 lat=  902 jit=1220 tput=  190KB/s score= 75.73 S US/East Los Angeles 
+✅ mux-core @ bbs.alipansou.com          lat=  407 jit=  82 tput=  364KB/s score= 94.15 S JP/Narita 
+✅ mux-core @ cdn.204910.best            lat=  374 jit=  86 tput=  415KB/s score=  94.3 S JP/Narita 
+✅ mux-core @ api.gzcrtw.com             lat=  364 jit= 195 tput=  437KB/s score= 91.12 S JP/Narita 
+✅ mux-core @ cdn.667891.xyz             lat=  377 jit= 165 tput=  416KB/s score= 91.91 S JP/Narita 
+✅ mux-core @ cdn.7zz.cn                 lat=  400 jit= 315 tput=    1KB/s score= 52.39 A JP/Narita 
+✅ mux-core @ baota.us.kg                lat=  350 jit= 179 tput=    1KB/s score= 56.89 A JP/Narita 
+✅ mux-core @ cdn.ctn32.us.kg            lat=  452 jit= 152 tput=  451KB/s score= 91.67 S JP/Narita 
+✅ mux-core @ cdn.ddeed.de               lat=  514 jit= 445 tput=  133KB/s score= 70.64 S SG/Singapore 
+✅ mux-core @ cf.254301.xyz              lat=  483 jit= 329 tput=  171KB/s score= 81.03 S SG/Singapore 
+✅ mux-core @ cdn.cnno.de                lat=  793 jit=1155 tput=  114KB/s score= 63.34 A NL/Amsterdam 
+✅ mux-core @ cdn.555586.xyz             lat=  663 jit= 448 tput=  124KB/s score= 67.74 A SG/Singapore 
+✅ mux-core @ cf.nyanya.moe              lat=  353 jit= 116 tput=    0KB/s score= 58.58 A JP/Narita 
+✅ mux-core @ cf.877774.xyz              lat=  300 jit= 138 tput=    0KB/s score= 58.36 A JP/Narita 
+✅ mux-core @ saas.072159.xyz            lat=  367 jit= 107 tput=  419KB/s score= 93.73 S JP/Narita 
+✅ mux-core @ mail.notion.com            lat=  951 jit= 327 tput=  142KB/s score= 72.11 S SG/Singapore 
+✅ mux-core @ openai.com                 lat=  607 jit= 117 tput=  233KB/s score= 91.43 S SG/Singapore 
+✅ mux-core @ spring.io                  lat=  763 jit= 318 tput=  267KB/s score=  84.1 S SG/Singapore 
+✅ mux-core @ p.etime.vip                lat=  437 jit=  53 tput=  401KB/s score= 94.77 S JP/Narita 
+✅ mux-core @ staticdelivery.nexusmods.com lat=  637 jit= 289 tput=  254KB/s score= 86.02 S SG/Singapore 
+✅ mux-core @ stores.staples.com         lat=  704 jit= 853 tput=  203KB/s score= 79.13 S SG/Singapore 
+✅ mux-core @ vps.cheng2001.top          lat=  354 jit=  60 tput=  429KB/s score= 95.25 S JP/Narita 
+✅ mux-core @ versantstore.pearson.com   lat=  873 jit= 729 tput=  105KB/s score=  61.1 A SG/Singapore 
+✅ mux-core @ www.bangbenjiaju.com       lat=  713 jit= 660 tput=   71KB/s score= 56.48 A SG/Singapore 
+✅ mux-core @ www.broadcom.com           lat=  838 jit=1715 tput=   54KB/s score= 52.47 A SG/Singapore 
+✅ mux-core @ www.5199dy.com             lat=  987 jit=   0 tput=  164KB/s score= 85.48 S  
+✅ mux-core @ securecircle.com           lat=  484 jit= 386 tput=  114KB/s score= 69.34 A  
+✅ mux-core @ www.deepl.com              lat=  691 jit=1067 tput=  108KB/s score= 63.14 A SG/Singapore 
+✅ mux-core @ www.giannidelprete.it      lat= 1370 jit= 677 tput=  234KB/s score= 73.58 S SG/Singapore 
+✅ mux-core @ saas.sin.fan               lat=  404 jit=  76 tput=  416KB/s score= 94.35 S  
+✅ mux-core @ www.galgamex.net           lat=  963 jit= 564 tput=   94KB/s score= 58.43 A SG/Singapore 
+✅ mux-core @ www.mfyx.cn                lat=  377 jit=  38 tput=  390KB/s score= 95.72 S JP/Narita 
+✅ mux-core @ www.sloomb.com             lat=  489 jit=1374 tput=   66KB/s score= 57.47 A SG/Singapore 
+✅ mux-core @ www.gov.il                 lat=  621 jit=1313 tput=   78KB/s score= 58.48 A SG/Singapore 
+✅ mux-core @ www.swowd.com              lat=  839 jit= 320 tput=   50KB/s score= 57.16 A SG/Singapore 
+✅ mux-core @ www.leics.police.uk        lat=  715 jit= 822 tput=  197KB/s score= 78.52 S SG/Singapore 
+✅ mux-core @ www.vmware.com             lat= 1774 jit= 164 tput=   44KB/s score=    53 A SG/Singapore 
+✅ mux-core-2 @ 103.21.244.1               lat=  828 jit=2312 tput=  128KB/s score=  65.5 A US/East Los Angeles 
+✅ mux-core @ www.wuduanyun.com          lat=  372 jit=  67 tput=  403KB/s score= 94.89 S JP/Narita 
+✅ mux-core-2 @ 104.17.2.1                 lat=  969 jit=1639 tput=  177KB/s score=  72.9 S US/East Los Angeles 
+✅ mux-core @ www.wto.org                lat=  940 jit= 926 tput=  111KB/s score= 61.59 A SG/Singapore 
+✅ mux-core-2 @ 104.25.1.1                 lat=  802 jit= 468 tput=  158KB/s score= 71.93 S NL/Amsterdam 
+✅ mux-core-2 @ 104.16.3.1                 lat=  932 jit=1212 tput=  177KB/s score= 73.21 S US/East Los Angeles 
+✅ mux-core-2 @ 188.114.97.1               lat=  840 jit= 342 tput=  168KB/s score= 77.14 S NL/Amsterdam 
+✅ mux-core-2 @ api.gzcrtw.com             lat=  445 jit= 143 tput=  420KB/s score=    92 S JP/Narita 
+✅ mux-core-2 @ auto.dolby.dpdns.org       lat=  361 jit=  80 tput=  380KB/s score= 94.59 S JP/Narita 
+✅ mux-core-2 @ ahrefs.com                 lat= 1307 jit= 506 tput=   64KB/s score= 50.31 A SG/Singapore 
+✅ mux-core-2 @ bbs.alipansou.com          lat=  292 jit= 180 tput=  499KB/s score= 92.17 S JP/Narita 
+✅ mux-core-2 @ cdn.204910.best            lat=  396 jit=  41 tput=  415KB/s score= 95.47 S JP/Narita 
+✅ mux-core-2 @ baota.us.kg                lat=  328 jit= 215 tput=  412KB/s score= 90.82 S JP/Narita 
+✅ mux-core-2 @ cdn.555586.xyz             lat=  901 jit=1347 tput=  328KB/s score= 77.49 S SG/Singapore 
+✅ mux-core-2 @ cdn.667891.xyz             lat=  369 jit= 335 tput=  456KB/s score= 86.88 S JP/Narita 
+✅ mux-core-2 @ cdn.cnno.de                lat=  917 jit=  34 tput=   97KB/s score= 73.31 S NL/Amsterdam 
+✅ mux-core-2 @ cdn.ctn32.us.kg            lat=  409 jit= 105 tput=  402KB/s score= 93.44 S JP/Narita 
+✅ mux-core-2 @ cf.877774.xyz              lat=  389 jit= 121 tput=    1KB/s score=  58.3 A JP/Narita 
+✅ mux-core-2 @ cf.254301.xyz              lat= 1177 jit= 735 tput=  145KB/s score= 65.57 A SG/Singapore 
+✅ mux-core-2 @ cf.nyanya.moe              lat=  321 jit= 135 tput=  516KB/s score= 93.28 S JP/Narita 
+✅ mux-core-2 @ cdn.7zz.cn                 lat=  339 jit= 172 tput=  420KB/s score= 92.02 S JP/Narita 
+✅ mux-core-2 @ cdn.ddeed.de               lat=  739 jit= 444 tput=  162KB/s score= 73.87 S SG/Singapore 
+✅ mux-core-2 @ p.etime.vip                lat=  334 jit= 113 tput=    0KB/s score= 58.83 A JP/Narita 
+✅ mux-core-2 @ saas.sin.fan               lat=  402 jit=  53 tput=  414KB/s score= 95.06 S JP/Narita 
+✅ mux-core-2 @ saas.072159.xyz            lat=  413 jit=  62 tput=    0KB/s score=  59.7 A JP/Narita 
+✅ mux-core-2 @ mail.notion.com            lat=  760 jit= 325 tput=   77KB/s score= 62.39 A SG/Singapore 
+✅ mux-core-2 @ spring.io                  lat=  626 jit= 835 tput=   36KB/s score= 51.08 A SG/Singapore 
+✅ mux-core-2 @ openai.com                 lat= 1603 jit=3141 tput=   74KB/s score= 49.59 A SG/Singapore 
+✅ mux-core-2 @ versantstore.pearson.com   lat= 1866 jit=2251 tput=   74KB/s score=  47.4 A SG/Singapore 
+✅ mux-core-2 @ staticdelivery.nexusmods.com lat= 1239 jit=1350 tput=  121KB/s score= 60.85 A SG/Singapore 
+✅ mux-core-2 @ www.5199dy.com             lat= 1697 jit=   0 tput=    0KB/s score= 50.86 A  
+✅ mux-core-2 @ stores.staples.com         lat= 1242 jit= 486 tput=   74KB/s score= 53.02 A SG/Singapore 
+✅ mux-core-2 @ www.broadcom.com           lat=  530 jit= 974 tput=  108KB/s score= 64.48 A SG/Singapore 
+✅ mux-core-2 @ vps.cheng2001.top          lat=  304 jit= 104 tput=  396KB/s score= 94.35 S JP/Narita 
+✅ mux-core-2 @ www.bangbenjiaju.com       lat=  618 jit= 888 tput=  107KB/s score= 63.58 A SG/Singapore 
+✅ mux-core-2 @ www.deepl.com              lat=  938 jit=1386 tput=   95KB/s score= 58.81 A SG/Singapore 
+✅ mux-core-2 @ www.galgamex.net           lat=  722 jit=1407 tput=   73KB/s score= 56.76 A SG/Singapore 
+✅ mux-core-2 @ securecircle.com           lat= 1013 jit= 912 tput=  138KB/s score= 65.71 A  
+✅ mux-core-2 @ www.giannidelprete.it      lat=  969 jit= 786 tput=   56KB/s score= 51.72 A SG/Singapore 
+✅ mux-core-2 @ www.gov.il                 lat=  691 jit=1090 tput=  116KB/s score= 64.54 A SG/Singapore 
+✅ mux-core-2 @ www.mfyx.cn                lat=  334 jit= 133 tput=    0KB/s score= 58.23 A JP/Narita 
+✅ mux-core-2 @ www.swowd.com              lat=  799 jit=1007 tput=  151KB/s score= 69.77 A NL/Amsterdam 
+✅ mux-core-2 @ www.sloomb.com             lat=  947 jit=  93 tput=   84KB/s score= 69.02 A SG/Singapore 
+✅ mux-core-2 @ www.leics.police.uk        lat= 1071 jit= 663 tput=  130KB/s score= 63.83 A SG/Singapore 
+✅ mux-core-2 @ www.wuduanyun.com          lat=  368 jit=  34 tput=  512KB/s score= 95.91 S JP/Narita 
+✅ mux-core-2 @ www.vmware.com             lat=  918 jit= 625 tput=   93KB/s score= 58.63 A SG/Singapore 
+✅ mux-core-3 @ 103.21.244.1               lat=  980 jit= 938 tput=   42KB/s score= 49.18 A US/East Los Angeles 
+✅ mux-core-3 @ 104.16.3.1                 lat=  975 jit=4043 tput=  107KB/s score=  60.6 A US/East Los Angeles 
+✅ mux-core-3 @ 104.25.1.1                 lat= 1084 jit= 109 tput=  120KB/s score=  73.7 S NL/Amsterdam 
+✅ mux-core-3 @ 104.17.2.1                 lat= 1956 jit=3084 tput=  102KB/s score= 51.55 A US/East Los Angeles 
+✅ mux-core-3 @ api.gzcrtw.com             lat=  368 jit= 140 tput=  373KB/s score= 92.73 S JP/Narita 
+✅ mux-core-3 @ auto.dolby.dpdns.org       lat=  398 jit=  97 tput=  441KB/s score= 93.77 S JP/Narita 
+✅ mux-core-2 @ www.wto.org                lat=  832 jit= 651 tput=   82KB/s score= 57.42 A SG/Singapore 
+✅ mux-core-3 @ 188.114.97.1               lat=  965 jit= 136 tput=  164KB/s score= 81.58 S NL/Amsterdam 
+✅ mux-core-3 @ ahrefs.com                 lat= 1745 jit= 562 tput=   50KB/s score= 44.21 B SG/Singapore 
+✅ mux-core-3 @ bbs.alipansou.com          lat=  318 jit= 189 tput=    1KB/s score= 56.86 A JP/Narita 
+✅ mux-core-3 @ cdn.555586.xyz             lat=  977 jit=1467 tput=   75KB/s score= 54.98 A SG/Singapore 
+✅ mux-core-3 @ baota.us.kg                lat=  409 jit= 312 tput=  527KB/s score= 87.23 S JP/Narita 
+✅ mux-core-3 @ cdn.667891.xyz             lat=  369 jit=  71 tput=  454KB/s score=  94.8 S JP/Narita 
+✅ mux-core-3 @ cdn.7zz.cn                 lat=  408 jit= 169 tput=  583KB/s score= 91.53 S JP/Narita 
+✅ mux-core-3 @ cdn.204910.best            lat=  313 jit= 102 tput=  396KB/s score= 94.33 S JP/Narita 
+✅ mux-core-3 @ cdn.ddeed.de               lat= 1350 jit= 439 tput=  118KB/s score= 61.23 A SG/Singapore 
+✅ mux-core-3 @ cf.254301.xyz              lat=  896 jit=1557 tput=   56KB/s score= 52.33 A SG/Singapore 
+✅ mux-core-3 @ cf.877774.xyz              lat=  343 jit=  71 tput=  448KB/s score= 95.01 S JP/Narita 
+✅ mux-core-3 @ cdn.ctn32.us.kg            lat=  481 jit= 402 tput=    0KB/s score= 48.93 A JP/Narita 
+✅ mux-core-3 @ cf.nyanya.moe              lat=  430 jit=  65 tput=    0KB/s score= 59.47 A JP/Narita 
+✅ mux-core-3 @ p.etime.vip                lat=  381 jit=  77 tput=  406KB/s score= 94.52 S JP/Narita 
+✅ mux-core-3 @ openai.com                 lat= 1105 jit= 860 tput=   46KB/s score= 48.84 A SG/Singapore 
+✅ mux-core-3 @ mail.notion.com            lat= 1205 jit= 539 tput=  132KB/s score= 63.06 A SG/Singapore 
+✅ mux-core-3 @ saas.072159.xyz            lat=  380 jit= 116 tput=  437KB/s score= 93.35 S JP/Narita 
+✅ mux-core-3 @ saas.sin.fan               lat=  346 jit=  84 tput=  542KB/s score=  94.6 S JP/Narita 
+✅ mux-core-3 @ spring.io                  lat= 1283 jit= 594 tput=   69KB/s score= 51.38 A SG/Singapore 
+✅ mux-core-3 @ securecircle.com           lat=  708 jit=1150 tput=  158KB/s score= 71.75 S SG/Singapore 
+✅ mux-core-3 @ versantstore.pearson.com   lat=  782 jit=1221 tput=  115KB/s score= 63.61 A SG/Singapore 
+✅ mux-core-3 @ staticdelivery.nexusmods.com lat= 1258 jit= 538 tput=  176KB/s score= 70.32 S SG/Singapore 
+✅ mux-core-3 @ cdn.cnno.de                lat= 1170 jit= 600 tput=   38KB/s score=  46.9 A  
+✅ mux-core-3 @ stores.staples.com         lat= 1132 jit= 758 tput=   52KB/s score= 49.67 A SG/Singapore 
+✅ mux-core-3 @ www.5199dy.com             lat= 1584 jit=  67 tput=    0KB/s score= 49.79 A  
+✅ mux-core-3 @ www.bangbenjiaju.com       lat= 1307 jit= 767 tput=   77KB/s score= 52.58 A SG/Singapore 
+✅ mux-core-3 @ www.deepl.com              lat=  849 jit=1280 tput=   43KB/s score= 50.45 A SG/Singapore 
+✅ mux-core-3 @ www.galgamex.net           lat= 1299 jit=1245 tput=   99KB/s score=  56.5 A SG/Singapore 
+✅ mux-core-3 @ www.broadcom.com           lat= 1575 jit= 543 tput=   39KB/s score=  43.7 B SG/Singapore 
+✅ mux-core-3 @ www.gov.il                 lat= 1408 jit=1939 tput=  124KB/s score= 59.97 A SG/Singapore 
+✅ mux-core-3 @ www.leics.police.uk        lat= 1469 jit=1533 tput=  141KB/s score= 62.43 A SG/Singapore 
+✅ mux-core-3 @ www.giannidelprete.it      lat= 1421 jit= 740 tput=  101KB/s score= 55.83 A SG/Singapore 
+✅ mux-core-3 @ www.mfyx.cn                lat=  361 jit= 169 tput=  440KB/s score= 91.92 S JP/Narita 
+✅ mux-core-3 @ www.vmware.com             lat= 1296 jit= 919 tput=   80KB/s score=  53.2 A SG/Singapore 
+✅ mux-core-3 @ www.sloomb.com             lat= 1500 jit= 681 tput=   33KB/s score= 43.28 B SG/Singapore 
+✅ mux-core-3 @ www.wuduanyun.com          lat=  481 jit= 261 tput=    1KB/s score= 53.34 A JP/Narita 
+✅ mux-core-3 @ vps.cheng2001.top          lat=  336 jit= 378 tput=    1KB/s score= 51.04 A  
+✅ mux-core-3 @ www.swowd.com              lat=  895 jit= 419 tput=   83KB/s score=  59.5 A NL/Amsterdam 
+✅ mux-core-3 @ www.wto.org                lat= 1552 jit=1846 tput=   69KB/s score= 49.14 A SG/Singapore 
+
+本轮测 159 可用；合并保留 24 条旧数据；总计 159 条 → /Users/apple/cfmux/data/quality.json
+国家分布 {"NL":12,"US":14,"SG":66,"JP":46}
+[*] 写入 KV …
+{"result":null,"errors":[],"messages":[],"success":true}
+[*] history 已追加: {'ts': 1793325411082, 'ok': 159, 'total': 159, 'avg': 68.3, 'best': 95.9, 'dead': 0}
+[+] 完成：2026-10-30 09:56:53

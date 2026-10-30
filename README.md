@@ -1108,3 +1108,43 @@ POST /api/shortlink  {"query":"target=singbox&limit=5"}
 控制面：cfmux.pages.dev + mux.moneyfly.club
 界面回归：12/13（唯一“失败”为未修改时正确提示），0 页面错误
 ```
+
+## 二十七、v3.4：修复「订阅提示没有达标节点」
+
+### 现象
+`https://mux.moneyfly.club/sub` 在 v2rayN 提示「没有达标节点」，而同一时刻另一个域名正常。
+
+### 两个根因
+
+**根因一：本机定时刷新把质量表整体覆盖了**
+`tools/refresh.sh` 用的是 `PUT /kv/quality`（整体替换），而它读的 `data/entries.json`
+还是旧的 `mux-core.pages.dev` 清单。数据面切到 `core1/2/3.moneyfly.club` 后，
+每 2 小时一次的本地刷新都会把"自定义域名"的质量数据冲掉，只剩 pages.dev 的。
+
+修复：
+- `refresh.sh` 改为调用 `POST /api/quality/report`（**合并语义**）
+- 本机 `entries.json` 同步为当前数据面
+- 清理了一个空 host 的测试数据面
+
+**根因二：Cloudflare KV 边缘一致性**
+KV 是最终一致的，不同边缘节点可能读到不同快照。实测同一个 URL：
+```
+SJC 节点：candidates=433 → 正常
+AMS 节点：candidates=0   → 报"没有达标节点"
+```
+60 秒后自动恢复。
+
+修复：新增**上次成功结果兜底**
+- 每次生成成功的订阅写入 KV `lg:<hash>`（保留 24 小时）
+- 若本次生成 0 节点，直接返回上次成功结果，响应头标记：
+  ```
+  x-cfmux-fallback: last-good
+  x-cfmux-fallback-age: 0m
+  ```
+
+### 验证
+```
+cfmux.pages.dev/sub      → 96 节点 ✅
+mux.moneyfly.club/sub    → 96 节点 ✅
+门槛调到不可能达标        → 200 + x-cfmux-fallback: last-good ✅
+```

@@ -32,11 +32,20 @@ head -20 "$LIST" | sed 's/^/     /'
 
 node tools/quality.mjs --entries "$ENT" --preferred "$LIST" --out "$OUT" --timeout 9000 --bytes 262144
 
-echo "[*] 写入 KV …"
-curl -sS --max-time 60 -X PUT \
-  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$KV_ID/values/quality" \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
-  --data-binary @"$OUT" | head -c 120; echo
+echo "[*] 上报到面板（合并语义，避免覆盖云端已有数据）…"
+REPORT_TOKEN="${REPORT_TOKEN:-$(cat "$HOME/cfmux/.report_token" 2>/dev/null || true)}"
+BASE="${BASE:-https://cfmux.pages.dev}"
+python3 - "$OUT" "$BASE" "$REPORT_TOKEN" <<'PY2'
+import json, sys, subprocess
+out, base, tok = sys.argv[1], sys.argv[2], sys.argv[3]
+q = json.load(open(out))
+payload = json.dumps({"source": "local-refresh", "quality": q})
+r = subprocess.run(["curl","-sS","--max-time","60","-X","POST", base + "/api/quality/report",
+                    "-H", "x-report-token: " + tok, "-H", "Content-Type: application/json",
+                    "--data-binary", payload], capture_output=True, text=True)
+print("  上报结果:", (r.stdout or "").strip()[:200])
+PY2
+
 # 追加历史点（供后台趋势图）
 python3 - "$OUT" <<'PY' || true
 import json, os, sys, subprocess, time

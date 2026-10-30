@@ -434,10 +434,31 @@ const CC_NAME = {
   JO: '约旦', LB: '黎巴嫩', IQ: '伊拉克', IR: '伊朗', MA: '摩洛哥', TN: '突尼斯', DZ: '阿尔及利亚',
 };
 
+function quickHash(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+function lgKey(url) {
+  const u = new URL(url.toString());
+  u.searchParams.delete('nocache');
+  u.searchParams.delete('t');
+  return 'lg:' + quickHash(u.pathname + '?' + u.searchParams.toString());
+}
+
 async function subscription(request, env, url) {
   // 边缘缓存 60s：同一订阅 URL 命中缓存直接返回，省 KV 读与 CPU
   // ?nocache=1 可绕过缓存（改完配置立刻生效）
-  if (url.searchParams.get('nocache')) return buildSubscription(request, env, url);
+  if (url.searchParams.get('nocache')) {
+    const fresh = await buildSubscription(request, env, url);
+    if (fresh.status === 200) {
+      try { await saveLastGood(env, url, fresh.clone()); } catch {}
+      return fresh;
+    }
+    const fallback = await getLastGood(env, url);
+    if (fallback) return fallback;
+    return fresh;
+  }
   const cache = caches.default;
   const ckey = new Request(url.toString(), { method: 'GET' });
   try {
@@ -445,8 +466,36 @@ async function subscription(request, env, url) {
     if (hit) return hit;
   } catch {}
   const resp = await buildSubscription(request, env, url);
-  try { if (resp.status === 200) await cache.put(ckey, resp.clone()); } catch {}
+  if (resp.status === 200) {
+    try { await cache.put(ckey, resp.clone()); } catch {}
+    try { await saveLastGood(env, url, resp.clone()); } catch {}
+    return resp;
+  }
+  // 兜底：KV 边缘一致性抖动 / 数据暂时为空时，返回最近一次成功结果
+  const fallback = await getLastGood(env, url);
+  if (fallback) return fallback;
   return resp;
+}
+
+async function saveLastGood(env, url, resp) {
+  if (!env.KV) return;
+  const body = await resp.text();
+  if (!body || body.length > 900000) return;
+  const ct = resp.headers.get('content-type') || 'text/plain; charset=utf-8';
+  await env.KV.put(lgKey(url), JSON.stringify({ ts: Date.now(), body, ct }));
+}
+async function getLastGood(env, url) {
+  if (!env.KV) return null;
+  try {
+    const raw = await env.KV.get(lgKey(url));
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || !o.body || Date.now() - (o.ts || 0) > 86400000) return null;   // 只在 24 小时内兜底
+    return new Response(o.body, {
+      status: 200,
+      headers: { 'content-type': o.ct || 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-cfmux-fallback': 'last-good', 'x-cfmux-fallback-age': String(Math.round((Date.now() - o.ts) / 60000)) + 'm' },
+    });
+  } catch { return null; }
 }
 
 async function buildSubscription(request, env, url) {
@@ -941,7 +990,10 @@ async function apiQualityReport(request, env, url) {
 }
 
 async function apiStats(request, env, url) {
-  const r = await buildSubscription(new Request(url.toString().replace('/api/stats', '/sub') + '?target=plain&limit=0&nocache=1'), env, new URL(url.toString().replace('/api/stats', '/sub')));
+  const subUrl = new URL(url.toString());
+  subUrl.pathname = '/sub';
+  subUrl.search = '?target=plain&limit=0&nocache=1';
+  const r = await buildSubscription(new Request(subUrl.toString()), env, subUrl);
   const h = r.headers;
   return json({
     ok: true,
