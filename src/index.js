@@ -299,7 +299,7 @@ async function getEntries(env) {
   } catch {}
   const st = await getSettings(env);
   if (st.entries && Array.isArray(st.entries) && st.entries.length) return st.entries;
-  return [{ name: 'default', host: '', uuid: '' }];   // host 为空时用当前域名
+  return [];   // 没有配置数据面就返回空，由调用方报错，避免生成指向面板自身的坏节点
 }
 async function getKernelConfig(env, entry, force) {
   if (!entry || !entry.host || !entry.uuid) return null;
@@ -459,15 +459,17 @@ async function subscription(request, env, url) {
     if (fallback) return fallback;
     return fresh;
   }
-  const cache = caches.default;
+  const cache = (typeof caches !== 'undefined' && caches.default) ? caches.default : null;
   const ckey = new Request(url.toString(), { method: 'GET' });
   try {
-    const hit = await cache.match(ckey);
-    if (hit) return hit;
+    if (cache) {
+      const hit = await cache.match(ckey);
+      if (hit) return hit;
+    }
   } catch {}
   const resp = await buildSubscription(request, env, url);
   if (resp.status === 200) {
-    try { await cache.put(ckey, resp.clone()); } catch {}
+    try { if (cache) await cache.put(ckey, resp.clone()); } catch {}
     try { await saveLastGood(env, url, resp.clone()); } catch {}
     return resp;
   }
@@ -481,8 +483,18 @@ async function saveLastGood(env, url, resp) {
   if (!env.KV) return;
   const body = await resp.text();
   if (!body || body.length > 900000) return;
+  const key = lgKey(url);
+  const h = quickHash(body);
+  // 内容没变就不写，避免每次订阅都产生一次 KV 写（免费版 1000 写/天）
+  try {
+    const raw = await env.KV.get(key);
+    if (raw) {
+      const o = JSON.parse(raw);
+      if (o && o.h === h && Date.now() - (o.ts || 0) < 3600000) return;
+    }
+  } catch {}
   const ct = resp.headers.get('content-type') || 'text/plain; charset=utf-8';
-  await env.KV.put(lgKey(url), JSON.stringify({ ts: Date.now(), body, ct }));
+  await env.KV.put(key, JSON.stringify({ ts: Date.now(), body, ct, h }));
 }
 async function getLastGood(env, url) {
   if (!env.KV) return null;
@@ -506,6 +518,7 @@ async function buildSubscription(request, env, url) {
   const kindFilter = (url.searchParams.get('kind') || '').toLowerCase();
   const cand = kindFilter ? candRaw.filter((c) => c.kind === kindFilter) : candRaw;
   const entries = await getEntries(env);
+  if (!entries.length) return json({ ok: false, msg: '没有配置数据面：请在后台「数据面」添加 host/uuid' }, 503);
   const quality = await getQuality(env);
   const th = await getThreshold(env);
   let colosMap = {}, banned = {};
@@ -625,7 +638,10 @@ async function buildSubscription(request, env, url) {
   if (target === 'singbox' || target === 'sing-box') return new Response(singboxConfig(sn, url, wsPath), { headers: hdr });
   if (target === 'clash' || target === 'stash' || target === 'mihomo' || target === 'meta') return new Response(clashConfig(sn, url, wsPath), { headers: hdr });
   if (target === 'plain' || target === 'text' || target === 'uri') return new Response(v2rayLinks(sn, url, wsPath), { headers: hdr });
-  if (target === 'json') return json({ nodes: sn.map((n) => ({ name: n.name, host: n.host, uuid: n.uuid, server: n.value, port: 443, sni: n.host, path: wsPath, ws: true, tls: true })) }, 200, hdr);
+  if (target === 'json') {
+    return new Response(JSON.stringify({ nodes: sn.map((n) => ({ name: n.name, host: n.host, uuid: n.uuid, server: n.value, port: 443, sni: n.host, path: n.path || wsPath, ws: true, tls: true })) }),
+      { status: 200, headers: { ...hdr, 'content-type': 'application/json' } });
+  }
   if (target === 'qx' || target === 'quantumult') return new Response(qxConfig(sn, wsPath), { headers: hdr });
   if (target === 'loon') return new Response(loonConfig(sn, wsPath), { headers: hdr });
   if (target === 'surge') return new Response(surgeConfig(sn, wsPath), { headers: hdr });
@@ -693,6 +709,13 @@ async function apiImport(request, env, url) {
   const body = await request.json().catch(() => ({}));
   const src = String(body.url || '').trim();
   if (!src) return json({ ok: false, msg: '缺少 url' }, 400);
+  if (!/^https?:\/\//i.test(src)) return json({ ok: false, msg: '只支持 http/https' }, 400);
+  let hostname = '';
+  try { hostname = new URL(src).hostname.toLowerCase(); } catch { return json({ ok: false, msg: 'URL 不合法' }, 400); }
+  const blocked = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|\[::1\]|::1)/.test(hostname);
+  if (blocked || hostname.endsWith('.internal') || hostname.endsWith('.local')) {
+    return json({ ok: false, msg: '不允许访问内网地址' }, 400);
+  }
   let text = '';
   try {
     const r = await fetch(src, { cf: { cacheTtl: 0, timeoutMs: 8000 } });
@@ -920,7 +943,11 @@ async function apiQualityReport(request, env, url) {
       try { pref = JSON.parse((await env.KV.get('preferred')) || '[]'); } catch {}
       const set = new Set(pref.map((x) => (typeof x === 'string' ? x : x.ip)));
       for (const v of top) if (!set.has(v)) { pref.push(v); set.add(v); promoted++; }
-      if (promoted) await env.KV.put('preferred', JSON.stringify(pref.slice(-200)));
+      if (promoted) {
+        // 只做上限保护，且上限远大于现有量，避免把已导入的数百个优选域名截掉
+        const capped = pref.length > 1200 ? pref.slice(-1200) : pref;
+        await env.KV.put('preferred', JSON.stringify(capped));
+      }
 
       // 自动淘汰（保守版）：候选在本轮取「各数据面最低分」，落在底部 25% 才记一次
       // 连续 pruneStrikes 轮（默认 3）且可用候选数 > pruneFloor（默认 60）才移出 preferred
@@ -952,9 +979,11 @@ async function apiQualityReport(request, env, url) {
         try { ban = JSON.parse((await env.KV.get('banned')) || '{}'); } catch {}
         const banHours = st.banHours ?? 168;
         for (const v of drop) { ban[v] = { until: Date.now() + banHours * 3600000, ts: Date.now() }; delete strikes[v]; }
-        await env.KV.put('banned', JSON.stringify(ban));
+        for (const v of Object.keys(ban)) if ((ban[v].until || 0) < Date.now()) delete ban[v];
+      await env.KV.put('banned', JSON.stringify(ban));
         pruned = before - p2.length;
       }
+      for (const k of Object.keys(strikes)) if (!seen.has(k) && !strikes[k]) delete strikes[k];
       await env.KV.put('strikes', JSON.stringify(strikes));
 
       // 解封：本轮分数回到中位数以上且不在底部 25%，解除封禁
@@ -1530,12 +1559,13 @@ function stateOf(n){ if (n.cool) return '<span class="bad">熔断</span>'; retur
 function renderTop(){
   const arr = nodeRows().filter(n=>n.ok && !n.cool).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
   $('topNodes').innerHTML = table(arr, ['国家','数据面','入口 IP','等级','评分','延迟','吞吐'], (n)=>[
-    n.cc ? (STATE.ccNames[n.cc]||n.cc) : (n.country||'-'),
-    n.host.replace('.pages.dev',''), n.ip,
+    esc(n.cc ? (STATE.ccNames[n.cc]||n.cc) : (n.country||'-')),
+    esc(n.host.replace('.pages.dev','')), esc(n.ip),
     '<span class="badge '+(n.tier||'C')+'">'+(n.tier||'-')+'</span>',
     (n.score||0).toFixed(1), (n.lat||'-')+'ms', (n.tput||0)+' KB/s'
   ]);
 }
+function escAttr(x){ return String(x == null ? '' : x).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function renderNodes(){
   const kw = ($('q-filter')?.value||'').toLowerCase();
   const tier = $('q-tier')?.value||''; const st = $('q-state')?.value||'';
@@ -1544,14 +1574,14 @@ function renderNodes(){
   if (tier) arr = arr.filter(n=>n.tier===tier);
   if (st==='ok') arr=arr.filter(n=>n.ok&&!n.cool); if (st==='dead') arr=arr.filter(n=>!n.ok); if (st==='cool') arr=arr.filter(n=>n.cool);
   const html = table(arr, ['国家','数据面','入口','等级','评分','延迟','抖动','吞吐','失败','状态','操作'], (n)=>[
-    n.cc ? (STATE.ccNames[n.cc]||n.cc) : (n.country||'-'),
-    n.host.replace('.pages.dev',''), n.ip,
+    esc(n.cc ? (STATE.ccNames[n.cc]||n.cc) : (n.country||'-')),
+    esc(n.host.replace('.pages.dev','')), esc(n.ip),
     '<span class="badge '+(n.tier||'C')+'">'+(n.tier||'-')+'</span>',
     (n.score||0).toFixed(1), (n.lat||'-')+'ms', (n.jitter||0)+'ms', (n.tput||0)+' KB/s',
     (n.fails||0), stateOf(n),
-    '<button class="btn alt" data-act="pin" data-key="'+n.key+'" onclick="doAct(this)">置顶</button> ' +
-    (n.cool ? '<button class="btn alt" data-act="unban" data-key="'+n.key+'" onclick="doAct(this)">解除</button>'
-            : '<button class="btn danger" data-act="ban" data-key="'+n.key+'" onclick="doAct(this)">熔断</button>')
+    '<button class="btn alt" data-act="pin" data-key="'+escAttr(n.key)+'" onclick="doAct(this)">置顶</button> ' +
+    (n.cool ? '<button class="btn alt" data-act="unban" data-key="'+escAttr(n.key)+'" onclick="doAct(this)">解除</button>'
+            : '<button class="btn danger" data-act="ban" data-key="'+escAttr(n.key)+'" onclick="doAct(this)">熔断</button>')
   ]);
   $('nodeTable').innerHTML = html;
 }
@@ -1809,11 +1839,20 @@ load();
 
 async function adminLogin(request, env) {
   if (!env.admin_password) return new Response(loginHtml(true), { status: 503, headers: { 'content-type': 'text/html; charset=utf-8' } });
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const fkey = 'lf:' + ip;
+  let fails = 0;
+  try { if (env.KV) fails = +(await env.KV.get(fkey) || 0); } catch {}
+  if (fails >= 5) {
+    return new Response('尝试次数过多，请 10 分钟后再试', { status: 429, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  }
   const form = new URLSearchParams(await request.text());
   const pass = form.get('password') || '';
   if (pass !== env.admin_password) {
+    try { if (env.KV) await env.KV.put(fkey, String(fails + 1), { expirationTtl: 600 }); } catch {}
     return new Response(loginHtml(false), { status: 401, headers: { 'content-type': 'text/html; charset=utf-8' } });
   }
+  try { if (env.KV) await env.KV.delete(fkey); } catch {}
   const tok = await adminToken(env);
   return new Response(null, {
     status: 302,

@@ -1,1150 +1,312 @@
-# cfmux — Cloudflare 边缘多路复用代理（自研）
+# cfmux
 
-> 一个「数据面 + 控制面」分离的 Cloudflare Workers / Pages 代理项目。
-> 数据面是自研的 VLESS-over-WebSocket 内核（不依赖 ProxyIP），控制面负责**实测优选**、健康过滤与多客户端订阅。
-
-## 一、先看结论：实测数据（2026-10-29，郑州电信 → Cloudflare）
-
-| 指标（各 5 次延迟 + 2 次下载） | cfmux（本项目） | cfnew（对照） |
-| --- | --- | --- |
-| 204 探测延迟 | 均值 **2.24 s**（1.40–3.23） | 均值 2.09 s（1.26–2.83） |
-| 1 MB 下载 | 均值 **~198 KB/s**（191–204） | 均值 ~126 KB/s（104–149） |
-| 优选后握手 RTT | TCP 177 ms / TLS 389 ms / WS 637 ms | — |
-| 边缘 IP 可用率 | 30 个候选中 18 个可用（60%） | — |
-
-> 结论：**延迟与成熟项目同量级**（受 CN→US West 回源路径限制），**吞吐本次实测更优**，
-> 本项目的增益主要在**可控性与稳定性**：优选可实测、死节点自动剔除、自带诊断。
-
-## 二、同类项目原理分析
-
-### 2.1 共同的数据模型
-
-这类项目的本质是 **「借 Cloudflare 的边缘节点做 L4/L7 转发」**：
+基于 Cloudflare 的代理**控制面**：自动收录优选 IP/域名 → 实测质量 → 生成带国家名的订阅。
+数据面直接使用成熟内核（cfnew），本项目不魔改内核，只做「质量 + 自动化 + 后台」。
 
 ```
-客户端 --TLS/WS--> CF 边缘(anycast) --Worker 运行时--> connect()/fetch() --> 目标
+订阅规模：候选 433 → 通过质量门槛 174 → 去重 35 → 输出 96~175 个节点
+国家识别：美国 · 日本 · 新加坡 · 荷兰 · 瑞典 · 德国 · 西班牙 · 英国 · 法国（识别率 ≈ 98%）
 ```
 
-- **VLESS/Trojan over WebSocket**：把代理协议塞进 WS 帧，CF 只看到「一个 WebSocket 请求」。
-- **配额模型**：免费版按**请求数**计费（100k 请求/天），**不按字节**。
-  于是「长连接 + 多路复用」= 用 1 个请求搬运大量数据 → 这就是"白嫖"的数学基础。
-- **出口两条路**：
-  1. `connect()`（`cloudflare:sockets`）—— 真正的 TCP 直连，**能代理任意 TCP**；
-  2. `fetch()` —— 只能 HTTP(S)，但不受 sockets 限制；
-  3. **ProxyIP** —— 把 TCP 交给第三方中转，绕开 `connect()` 的限制（也绕开了自己 Worker 的出口）。
+---
 
-### 2.2 edgetunnel（cmliu）的取舍
+## 一、原理
 
-- 单文件巨型内核（上万行），把管理后台、订阅、优选、ProxyIP 全塞进一个 Worker。
-- 优点：一座部署全都有；缺点：**每请求都要解析大量配置/模板，CPU 预算紧**，
-  且代码体积大 → 审计困难、改动风险高。
-- 默认依赖 **ProxyIP** 才能跑非 HTTP；`connect()` 能直连时反而不走。
+![架构](docs/architecture.png)
 
-### 2.3 cfnew（byJoey）的取舍
+### 1.1 两套独立部署
 
-- 拆成「精简内核（~37 KB）+ 独立面板」：内核只做代理 + `/api/config`，面板生成订阅。
-- 优点：内核小、CPU 省、配置可热更（KV）。
-- 缺点：**订阅与优选完全依赖第三方面板**；优选列表由面板下发，
-  你无法在**自己的网络**里实测——面板测的是面板服务器的延迟，不是你的。
-
-### 2.4 共性瓶颈（我据此做的改进）
-
-| 瓶颈 | 表现 | cfmux 的做法 |
-| --- | --- | --- |
-| 半包/粘包 | VLESS 头跨多个 WS 帧时解析失败，连接被误杀 | 显式状态机 `header→connecting→open`，攒够再解析 |
-| 连接并发竞态 | 头帧解析中收到数据帧，被当成新头 → `bad version` | 连接期单独队列 `queued`，建连后按序冲刷 |
-| 死 IP 拖慢 | `connect()` 对不可达 IP 要等 20 s 才失败 | `Promise.race` 超时（默认 8 s）+ 保留网段预拒绝 |
-| 无脑优选 | 面板/公共列表的 IP 与你的网络无关 | **本地实测**：TLS+WS+端到端三层测量后写 KV |
-| 配置读放大 | 每请求读 KV/解析大 JSON | 配置全走 env，isolate 内零外部依赖 |
-| 排障靠猜 | 出问题只能看客户端日志 | `/diag` 自检（sockets/fetch/colo）+ `/healthz` |
-
-## 三、架构
-
-```
-                    ┌──────────────── cfmux（Pages / Workers）────────────────┐
-客户端 --WS/TLS-->  │  index.js                                              │
-(sing-box/         │   ├─ /            任意路径 → VLESS 解析 → connect()      │
- Shadowrocket)      │   ├─ /healthz     健康检查（含 colo）                    │
-                    │   ├─ /diag        能力自检（sockets 可用性等）            │
-                    │   └─ /sub         订阅生成（base64 / clash / singbox）   │
-                    └────────────────────────────────────────────────────────┘
-                                     ▲
-        tools/measure.mjs  ── 实测优选 ──┘（写入 KV: preferred）
-
-GitHub Actions（每 6 小时）：measure → 写 KV → 订阅自动更新
-```
-
-### 关键实现点
-
-1. **零依赖数据面**：只用 `cloudflare:sockets` 的 `connect()`，不引入 ProxyIP。
-2. **首包聚合**：VLESS 头可能分片，先攒够 `version+uuid+addonLen` 再解析。
-3. **双向背压**：`socket.readable.pipeTo(WS)` + `writer.write()`，不整包缓存。
-4. **保留段预拒绝**：`1.1.1.0/24`、私网、TEST-NET 等直接拒绝，省 20 s。
-5. **订阅即优选**：`/sub` 读 KV 里的实测排序，输出 `url-test` / `fallback` 组。
-
-## 四、部署
-
-```bash
-# 1. 建 Pages 项目并设 UUID
-export CLOUDFLARE_API_TOKEN=...   # Pages:Edit
-export CLOUDFLARE_ACCOUNT_ID=...
-wrangler pages project create cfmux --production-branch main
-# 控制台 → 项目 → 设置 → 变量：uuid = <你的 UUID>；可选 KV 绑定名字 KV
-
-# 2. 部署内核
-mkdir -p dist && cp src/index.js dist/_worker.js
-wrangler pages deploy dist --project-name cfmux
-
-# 3. 验证
-curl https://cfmux.pages.dev/diag     # sockets.ok 应为 true
-curl https://cfmux.pages.dev/healthz
-
-# 4. 实测优选（在你自己的网络跑，不要用 CI 的结果代替）
-UUID=<你的 UUID>
-node tools/measure.mjs --host cfmux.pages.dev --uuid $UUID \
-  --ips 104.17.2.1,104.16.3.1,188.114.97.1 --out preferred.json
-
-# 5. 把 preferred.json 写进 KV 的 preferred 键，订阅即用最优 IP
-```
-
-## 五、订阅
-
-```
-https://<你的域名>/sub?target=base64   # V2Ray / Quantumult X
-https://<你的域名>/sub?target=clash    # Clash / Mihomo / Stash
-https://<你的域名>/sub?target=singbox  # sing-box
-```
-
-参数：`limit`（节点数，默认 12）、`host`（SNI/Host，默认当前域名）、`path`（WS 路径）。
-
-## 六、已知限制（重要）
-
-1. **不能连 Cloudflare 自家 IP**（`connect()` 到 CF 网段会被拒），所以
-   `speed.cloudflare.com`、`1.1.1.1` 等目标必须走 `fetch` 或 ProxyIP。
-2. **不支持 UDP**：sockets API 无 UDP，游戏/QUIC/部分 DNS 会回落到 TCP。
-3. **免费版 CPU 10 ms/请求**：大流量长连接没问题（流式转发 CPU 低），
-   但不要在同一请求里做重计算。
-4. **回源机房由边缘决定**：从中国大陆出网常落在 SJC/LAX，
-   实测 800 ms~2.8 s；**优选 IP 能改善首跳，但不能改变回源地理**。
-5. 免费额度 100k 请求/天/项目；WS 长连接只计 1 次，但**每个新请求都算**，
-   所以客户端要开 `url-test` 复用连接，不要频繁新建。
-
-## 七、与同类项目的定位差异
-
-| | edgetunnel | cfnew | **cfmux** |
+| 部署 | 例子 | 职责 | 转发流量 |
 | --- | --- | --- | --- |
-| 内核体积 | 巨大 | ~37 KB | **~9 KB** |
-| 依赖 ProxyIP | 默认是 | 可选 | **不依赖** |
-| 优选来源 | 面板/公共列表 | 面板 | **本地实测 + KV** |
-| 订阅 | 内置 | 第三方面板 | **内置，且与优选联动** |
-| 自检/诊断 | 无 | 无 | **/diag + /healthz** |
-| 配置热更 | 复杂 | KV | KV（仅优选表） |
+| **控制面** | `cfmux.pages.dev` / `mux.moneyfly.club` | 后台、订阅生成、统计、内核配置代理 | ❌ |
+| **数据面** | `mux-core.pages.dev` / `core1.moneyfly.club` … | 解析 VLESS/Trojan + `connect()` 转发 | ✅ |
+| **KV** | 控制面项目的 KV | entries / preferred / quality / kcfg / settings | — |
+| **测速机** | 你的 Mac（可选） | 实测质量并上报 | ❌ |
 
-## 八、License
+控制面只决定「给客户端哪些节点」，数据面才真正搬运流量。两者通过 KV 解耦。
 
-MIT
-
-## 九、面板与优选集成（v1.1）
-
-### 面板页
-`https://<你的域名>/panel` —— 自带的可视化控制台（Pages 直接托管，无需登录）：
-
-- 一键复制/打开三种订阅（通用 / Clash / sing-box）
-- **优选资源查询**：按关键字过滤（如 `hk`、`skk.moe`、`104.17`），按区域分组展示
-- 诊断面板：实时显示 colo、sockets 可用性、uuid 是否配置
-
-### 外部优选源（IP + 域名）
-内置接入 [BestCF](https://bestcf.fxxk.dedyn.io/)（cmliu/CF-Pages-BestCF）的优选域名表，
-并可用 `env.sources` 追加任意返回「一行一个」的列表地址（自动过滤注释与 HTML）：
-
-```bash
-# 追加你自己的优选源（逗号分隔）
-sources = "https://bestcf.fxxk.dedyn.io/cf_domains.txt,https://example.com/my_ips.txt"
-```
-
-合并顺序：**KV 实测排序（preferred） > 外部源**。实测 436 条（10 IP + 426 域名）。
-
-### 按区域（国家/地区）选节点
-CF 的边缘 colo 决定回源地区，所以「选国家」= 选落地 colo。用 `tools/colos.mjs` 探测：
-
-```bash
-node tools/colos.mjs --host <你的域名> --entries ips.txt --out colos.json
-# 写入 KV 的 colos 键后，订阅即可按区域过滤
-curl "https://<域名>/sub?region=SIN&limit=20"     # 新加坡
-curl "https://<域名>/sub?region=AMS&limit=20"     # 阿姆斯特丹
-```
-
-实测区域分布（26 条抽样）：`AMS:10 LAX:6 SIN:4 FRA:2 SJC:1 NRT:1`。
-
-> ⚠️ **实测结论：区域标签 ≠ 质量**。抽样的 SIN 域名节点延迟 2.1–9.5 s、49 KB/s，
-> 反而比裸 IP（`104.17.2.1`，LAX，198 KB/s）差。原因：域名经 CNAME 到不同 colo，
-> 且同一域名在不同时刻落地不同。**所以订阅默认按实测分排序，区域只作筛选维度。**
-
-### 节点数量
-`/sub?limit=N` 支持最多 **300** 个节点（默认 12），混合 IP 与域名；
-Clash 输出自动分组 `自动优选(url-test)` + `故障切换(fallback)`。
-
-### 部署步骤（完整）
-见本文件「四、部署」+ 上面两节：建 Pages → 设 `uuid`/`KV`/`sources` → 部署 →
-跑 `measure.mjs` 写 `preferred` → 跑 `colos.mjs` 写 `colos` → 访问 `/panel` 验证。
-
-## 十、后台管理（v1.2）
-
-### 地址与登录
-- 后台：`https://<你的域名>/admin`
-- 未设 `admin_password` 时后台不可用（页面会提示）；设置后为密码登录，
-  cookie = `SHA-256("cfmux|" + 密码)`，HttpOnly + Secure + SameSite=Lax，7 天有效。
-- 前端状态页（无需登录）：`/panel`
-
-### 后台能做什么
-| 区块 | 说明 |
-| --- | --- |
-| 订阅 | 三种格式链接一键打开 |
-| 基本设置 | 优选源（`sources`，逗号分隔 URL）、默认节点数（1–300） |
-| 优选表 `preferred` | KV 里的实测排序（JSON 数组），可手工编辑/粘贴 |
-| 区域映射 `colos` | `ip/域名 → colo` 映射，供 `?region=` 过滤 |
-| 保存 | 写入 KV，订阅**立即**生效（无需重新部署） |
-
-### 设置/修改密码
-```bash
-# Cloudflare 控制台 → Workers 和 Pages → cfmux → 设置 → 变量和机密
-# 添加或修改： admin_password = <你的新密码>
-# 变量改动后需要「重新部署」才生效（页面上点 Retry deployment 或重新 push 一次）
-```
-
-### 已验证行为
-```
-GET  /admin           未登录 → 200 登录页
-POST /admin/login     错误密码 → 401
-POST /admin/login     正确密码 → 302 + Set-Cookie
-GET  /admin           带 cookie → 200 控制台
-POST /admin/save      → {"ok":true}，/sub 立即按新 limit 输出
-POST /admin/save      未登录 → 401 {"ok":false,"msg":"未登录"}
-```
-
-## 十一、v2.0 架构调整：**数据面用完整内核，控制面做质量管控**
-
-> 前一版我自研的精简内核功能不全（缺 Trojan/XHTTP/家宽等），不符合「功能全保留」的要求。
-> v2.0 起改为两层：
+### 1.2 一次上网请求的完整路径
 
 ```
-┌─ 数据面 mux-core.pages.dev ──────────────┐   ← 完整内核（cfnew 2026.10.17.2）
-│  VLESS WS / Trojan WS / VLESS XHTTP      │      优选 / KV 配置 / ProxyIP / ECH…
-│  /api/config                             │
-└──────────────────────────────────────────┘
-                 ▲ Host/SNI 指向它
-┌─ 控制面 cfmux.pages.dev ─────────────────┐   ← 本项目（质量层）
-│  /admin    后台（密码登录）               │
-│  /sub      质量驱动订阅                   │
-│  /api/quality、/panel                    │
-└──────────────────────────────────────────┘
-     ▲ tools/quality.mjs 实测 → KV: quality
+① 客户端选节点：vless://<uuid>@104.17.2.1:443?host=core1.moneyfly.club&path=/?ed=2048
+② 客户端 TLS 连 104.17.2.1:443，SNI = core1.moneyfly.club
+③ Cloudflare 边缘按 Host 路由到该 Pages 项目的 Worker
+④ Worker 从 WebSocket 帧里解出 VLESS 头 → 目标 www.google.com:443
+⑤ Worker 用 connect() 建 TCP，双向 pipe 转发
+⑥ 响应原路返回：目标 → Worker → 边缘 → 客户端
 ```
 
-### 质量引擎：`tools/quality.mjs`
+> `server`（104.17.2.1）是**入口 IP**，不是出口；`host/SNI` 决定落到哪个数据面；
+> 真正出口在哪，由数据面所在机房决定（这就是测速表里的“国家”）。
 
-对「数据面 × 优选入口」的每个组合做四件事：
+### 1.3 四段链路，谁决定快慢
 
-1. **握手**：TCP → TLS → WS 三段 RTT
-2. **可用性**：VLESS 请求 `generate_204`，连续 3 次
-3. **抖动**：3 次延迟的 `max - min`
-4. **吞吐**：经隧道下载 ~256 KB，算 **KB/s**
+| 段 | 路径 | 由什么决定 |
+| --- | --- | --- |
+| A | 你 → 边缘 IP | **优选入口**（测速表的延迟） |
+| B | 边缘 → Worker | CF 内部，通常 <5ms |
+| C | Worker → 目标 | **落地机房**（测速表的国家/吞吐） |
+| D | 目标 → 你 | 原路返回 |
 
-评分公式（0–100）：
+换优选 IP 只优化 A 段，选国家优化 C 段，两者不能互相替代。
 
-```
-score = 延迟分×0.5 + 吞吐分×0.35 + 抖动分×0.15
-延迟分 = max(0, 100 - lat/60)        吞吐分 = min(100, KBps/2)      抖动分 = max(0, 100 - jitter/5)
-```
+---
 
-分级：`S≥70 / A≥45 / B≥20 / C<20`
+## 二、节点是怎么生成的
 
-### 订阅只放行达标节点
+### 2.1 四类输入
 
-`/sub` 会按 `quality` 表过滤：**`ok=false` 直接丢弃；`score < minScore` 或 `tput < minTput` 丢弃；
-其余按评分降序**。首次无质量数据时可用 `requireQuality=false` 放开（默认 true，宁缺毋滥）。
-
-响应头直接暴露筛选结果：
-
-```
-x-cfmux-total: 436      ← 候选总数
-x-cfmux-pass: 5         ← 通过质量门槛的
-x-cfmux-nodes: 5        ← 实际输出
-x-cfmux-minscore: 45    ← 当前门槛
-```
-
-### 实测（2026-10-29）
-
-| 候选 | 通过 | 评分区间 | 榜首节点实测 |
+| 符号 | 名称 | 来源 | 内容 |
 | --- | --- | --- | --- |
-| 436 条（10 IP + 426 域名） | **5 条** | 49.1 – 61.5（全 A 级） | 204: 2.6–3.9s · 下载 **194 KB/s** · google 200 |
+| `E` | entries 数据面 | KV `entries` | `{name, host, uuid, path}` |
+| `C` | candidates 候选入口 | KV `preferred` + 外部优选源 | IP / 域名 |
+| `Q` | quality 质量表 | KV `quality` | `"host\|入口" → {ok,score,tput,lat,jitter,cc,ts,cooldownUntil}` |
+| `K` | kernel 内核配置 | KV `kcfg:<host>`（保存时镜像） | `{ev,et,ex,ech,d,p,tp,…}` |
 
-### 后台新增（v2.0）
+### 2.2 四步生成
 
-| 区块 | 能做什么 |
-| --- | --- |
-| 数据面条目 `entries` | 增删数据面（name/host/uuid/path），支持多入口 |
-| 质量门槛 | `minScore`、`minTput`、`requireQuality` |
-| 质量表 | 前 20 名按评分排序，显示等级/延迟/抖动/吞吐 |
-| 优选源 / 优选表 / 区域映射 | 同 v1.2 |
+```
+① 内核闸门：决定「这个入口能不能出节点、什么协议、什么路径」
+   ev≠yes 且 (et≠yes 或 tp 为空) → 跳过该入口
+   proto = ev=yes ? vless : trojan
+   path  = K.d || '/'
 
-### 部署数据面（完整内核）
+② 质量闸门：决定「这个组合要不要」
+   必须有 Q[host|入口]；ok=true；未熔断；score≥minScore；tput≥minTput
+   数据新鲜度：≤maxAgeHours 正常 → ≤softExpireDays 保留但降 15 分排后 → 超过则丢弃
+
+③ 后处理：去重(同出口 IP 留最高分) → 每入口取 topK(perEntry) → 排序(pinned 优先) → limit 截断
+
+④ 格式化：base64 / clash / singbox / plain / json / qx / loon
+```
+
+### 2.3 为什么“达标数”和“订阅节点数”不一样
+
+```
+候选 433（3 数据面 × 145 入口）
+ → 通过质量门槛 174
+ → 去重 -35（同一出口 IP 只留评分最高）
+ → 输出 96~139
+```
+
+仪表盘「概览」直接显示这条漏斗，也可 `GET /api/stats` 查看。
+
+### 2.4 测速在哪跑
+
+**不在 Worker 里**。Worker 看不到「你的网络 → CF 边缘」这段延迟，只有客户端侧才准确。
+
+```
+TLS+WS 握手 → VLESS 请求 204 ×3（延迟/抖动）→ 隧道下载 256KB（吞吐）
+→ 经隧道查出口国家（ip-api → ipinfo → IP-only 源）→ 评分 S/A/B/C → 写 KV
+```
+
+两个执行入口（任选或都用）：
+
+| 入口 | 频率 | 特点 |
+| --- | --- | --- |
+| 本机 launchd | 2 小时 | 最准（你真实网络视角） |
+| GitHub Actions | 3 小时 | 云端保活，**你电脑关机也能跑** |
+
+质量数据带时间戳：48 小时内正常、30 天内降权保留、超 30 天丢弃；另有“上次成功订阅”兜底（24 小时）。
+
+---
+
+## 三、部署
+
+### 3.1 数据面（完整内核，不修改）
 
 ```bash
-# 1) 取最新内核
+# 1) 取内核
 curl -sL https://github.com/byJoey/cfnew/releases/latest/download/_worker.js -o kernel.js
 
-# 2) 建 Pages 项目（uuid + KV 绑定 C）
+# 2) 建 Pages 项目（每个数据面一个）
 wrangler pages project create mux-core --production-branch main
-# 控制台设：u = <UUID>；KV 绑定 C = <命名空间>
+#    控制台 → 项目 → 设置 → 变量：u = <UUID>；KV 绑定 C = <命名空间>
 
 # 3) 部署
 mkdir -p core && cp kernel.js core/_worker.js
 wrangler pages deploy core --project-name mux-core
 
-# 4) 验证：/ 应返回 hello；/<uuid>/api/config 应返回 JSON
+# 4) 验证：/ 返回 hello；/<uuid>/api/config 返回 JSON
 ```
 
-## 十二、v2.1：多数据面 · 真实国家 · 质量新鲜度
+需要 1~3 个数据面（分摊 10 万请求/天/项目，并做故障隔离）。
 
-### 1. 多数据面（3 入口分摊免费配额）
-| 数据面 | 用途 |
-| --- | --- |
-| `mux-core.pages.dev` | 主入口 |
-| `mux-core-2.pages.dev` | 分摊 100k 请求/天 |
-| `mux-core-3.pages.dev` | 分摊 + 故障隔离 |
-
-订阅自动跨入口合并、按质量分排序（实测 3×5=15 个组合全部可用）。
-
-### 2. 节点名显示**真实国家**（不是 colo 猜测）
-`tools/quality.mjs` 会**经隧道**访问 `ip-api.com`，读取该节点的**真实出口国家/城市**：
-
-```
-✅ mux-core.pages.dev @ 104.17.2.1  lat=803 jit=3176 tput=142KB/s score=68.16 A US/East Los Angeles
-✅ mux-core.pages.dev @ 188.114.97.1 lat=1267 jit=1187 tput=129KB/s score=62.02 A NL/Amsterdam
-```
-
-节点名优先级：**真实国家（geo）→ colo 中文名 → 类型标记**，输出如
-`美国-core-01-A`、`荷兰-阿姆斯特丹-core2-08-A`。
-
-### 3. 质量新鲜度（防止拿旧数据当高质）
-- `maxAgeHours`（默认 24）：超过该时长的质量数据视为过期，节点不进订阅
-- 后台可改；配合 `tools/refresh.sh` 定时刷新，保证订阅里的节点是**近期实测达标**的
-
-### 4. 本地定时刷新（推荐，用你自己的网络）
-```bash
-# 环境变量
-export KV_ID=<cfmux 的 KV 命名空间 id>
-export ENTRIES_FILE=/path/entries.json
-export PREF_FILE=/path/preferred.txt
-./tools/refresh.sh          # 测质量 → 写 KV → 订阅立即更新
-
-# macOS 定时（每 2 小时），可加到 crontab
-0 */2 * * * cd ~/cfmux && KV_ID=xxx ENTRIES_FILE=... PREF_FILE=... ./tools/refresh.sh >> ~/cfmux-refresh.log 2>&1
-```
-
-### 5. 后台修复与增强
-- 修复 `/admin` 1101（`esc` 提前引用导致的 TDZ 异常）
-- 新增：数据面条目编辑、质量门槛（`minScore`/`minTput`/`maxAgeHours`/`requireQuality`）、质量表（含国家列）
-
-### 实测（2026-10-29）
-```
-数据面 3 个 × 优选 5 个 = 15 组合，全部可用
-评分区间 46.5 – 70.97，全部 A/S 级
-真实国家：US/洛杉矶、NL/阿姆斯特丹（经隧道实测，非 colo 推断）
-订阅: 436 候选 → 15 通过 → 按分排序输出
-```
-
-## 十三、v2.2：完整管理后台（仪表盘）
-
-> 上一版后台只是"设置表单"，已重做为**多标签管理控制台**。
-
-### 界面结构
-
-| 标签 | 内容 |
-| --- | --- |
-| 📊 概览 | 6 张指标卡（达标节点/平均分/最高分/平均吞吐/熔断数/数据面数）+ 评分趋势 SVG 折线 + Top 节点表 |
-| 🛰 节点质量 | 全量节点表（国家/数据面/入口/等级/评分/延迟/抖动/吞吐/失败次数/状态），支持关键字 + 等级 + 状态筛选，**每行可一键熔断/解除** |
-| 📥 订阅 | 三种客户端订阅地址，一键复制 |
-| 🧩 数据面 | 表格化增删改（名称/域名/UUID/路径），保存即生效 |
-| ⚙️ 设置 | 质量门槛 6 项 + 优选源 + 区域映射（JSON 编辑器） |
-
-### 新增 API
-
-| 端点 | 作用 |
-| --- | --- |
-| `GET /api/state` | 仪表盘一次性拉取（settings/entries/quality/colos/history），需登录 |
-| `POST /api/action` | `{"type":"ban"\|"unban","key":"<host>\|<ip>"}` 手动熔断/恢复 |
-| `GET /api/quality?n=50` | 质量排行（公开，便于外部监控） |
-| `GET /api/entries` | 优选条目与区域分组（公开） |
-
-### 熔断与每入口择优
-
-- **熔断**：`tools/quality.mjs` 连续失败 3 次 → 写 `cooldownUntil`（默认 2h），订阅自动剔除；后台可手动熔断/解除
-- **每入口择优** `perEntry`（默认 2）：每个数据面各自取 top-K，避免某个入口霸榜，保证多入口都能分担流量
-- **趋势**：每次刷新追加一个历史点（`history`，保留 48 个），后台用 SVG 画评分曲线
-
-### 订阅缓存
-`/sub` 结果进 Cache API（60s），同一订阅 URL 命中缓存直接返回，省 KV 读与 CPU。
-改动配置后最多 60s 生效（可用 `?t=<now>` 破缓存）。
-
-### 实测
-
-```
-/api/state → 条目 3 · 质量样本 15 · 设置 minScore=45 maxAgeHours=48
-熔断 → /api/quality 显示 cooldown，/sub 自动剔除该节点
-订阅 perEntry=2 → 3 入口 × 2 = 6 个节点（每入口最优）
-```
-
-## 十四、v2.3：去重 · 扩大实测 · 多源地理 · 使用说明
-
-### 1. 节点去重（默认开启）
-同一个优选域名可能解析到同一台边缘 IP，导致订阅里出现"重复 IP"。
-现在按**真实出口 IP**（geo 返回的 `query`）去重，其次按**解析 IP**，保留评分最高的一条：
-
-```
-x-cfmux-pass: 20     ← 通过质量门槛
-x-cfmux-dedup: 1     ← 被去重掉的重复项
-x-cfmux-nodes: 19    ← 实际输出
-```
-`?dedup=0` 可关闭。
-
-### 2. 扩大实测范围（达标率问题的根因）
-之前只有 13 条达标，是因为**只测了 13 个候选**（5 IP + 8 域名），其余 400+ 域名从未实测，
-`requireQuality=true` 下自然不进订阅。
-
-现在 `tools/quality.mjs` 支持**并发测量**（`--concurrency`）与**快速发现模式**（`--fast`）：
+### 3.2 控制面
 
 ```bash
-# 第一步：快速发现（只测延迟+国家，1 次探测）
-node tools/quality.mjs --entries entries.json --preferred cand.txt --out discover.json --fast --concurrency 8
+git clone <本仓库> && cd cfmux
 
-# 第二步：对可用候选做全量质量测量（延迟×3 + 抖动 + 吞吐 + 地理）
-node tools/quality.mjs --entries entries.json --preferred alive.txt --out quality.json --concurrency 6
+# 1) 建项目
+wrangler pages project create cfmux --production-branch main
+
+# 2) 设变量（控制台或 API）
+#    uuid          数据面 UUID（单数据面时用）
+#    admin_password 后台密码
+#    report_token  上报口令（CI/本机写质量用，随便生成一串随机值）
+#    KV 绑定 KV = <命名空间>
+
+# 3) 部署（内置双重语法校验）
+./tools/deploy.sh
 ```
 
-实测：**84 个候选 → 71 可用 → 2 入口 × 71 = 142 组合全部可测**，
-国家分布 `US:38 SG:9 NL:11 DE:4 JP:3`。
-
-### 3. 多源地理探测（国家更完整）
-`ip-api.com` 有速率限制，大量测量时会失败。现在按顺序回退三个源，各重试 2 次：
-
-```
-ip-api.com/json → ipinfo.io/json → ip.3322.net（仅返回 IP）
-```
-
-节点名优先用**真实出口国家**，缺少时回退 colo 中文名，再回退 `IP/域名` 标记。
-
-### 4. 订阅默认返回全部达标节点
-`limit` 默认 `0` = 不限制（上限 300）。`perEntry` 默认 `0` = 每入口全量参与。
-需要精简时再传 `limit=10`。
-
-### 5. 使用说明（面向使用者）
-- 公开状态页 `/panel` 新增**使用说明**卡片：三步上手、全部参数含义、常见问题
-- 参数速查：
-
-| 参数 | 含义 |
-| --- | --- |
-| `target` | `base64`(默认) / `clash` / `singbox` |
-| `limit` | 节点数，0=全部（≤300） |
-| `kind` | `ip` 只要优选 IP / `domain` 只要优选域名 |
-| `like` | 关键字筛选（国家/关键字） |
-| `perEntry` | 每入口取几个（0=不限） |
-| `dedup` | `0` 关闭去重 |
-| `nocache` | `1` 跳过 60s 缓存 |
-
-### 6. 阈值可调（达标率与质量的平衡）
-| 门槛 | 默认 | 说明 |
-| --- | --- | --- |
-| `minScore` | 45 | 评分下限（0–100），调低=更多节点 |
-| `minTput` | 0 | 吞吐下限 KB/s |
-| `maxAgeHours` | 24 | 数据有效期，过期不参与 |
-| `requireQuality` | true | 无实测数据的候选一律排除 |
-
-## 十五、v2.4 实测结果（2026-10-29 最终）
-
-### 订阅规模
-```
-候选 436（IP + 优选域名） → 通过 188 → 去重 41 → 输出 147 个节点
-```
-
-### 国家分布（真实出口，经隧道实测）
-| 国家 | 节点数 |
-| --- | --- |
-| 🇸🇬 新加坡 | 38 |
-| 🇺🇸 美国 | 31 |
-| 🇳🇱 荷兰 | 19 |
-| 🇯🇵 日本 | 15 |
-| 🇩🇪 德国 | 6 |
-| 🇬🇧 英国 | 2 |
-| 未识别（geo 超时） | 36（标记为「域名」/「IP」）|
-
-### 全流程实测（三阶段）
-| 阶段 | 命令 | 结果 |
-| --- | --- | --- |
-| 快速发现 | `--fast --concurrency 10` | 426 域名 → 271 可用 |
-| 全量质量 | `--concurrency 6` | 142 + 80 组合全部可测 |
-| 合并去重 | 自动 | 218 组合 → 147 节点 |
-
-### 后台全功能验收（21/21 通过）
-```
-✅ 未登录 /admin 登录页        ✅ 错误密码 401
-✅ 正确密码 302+Cookie        ✅ 仪表盘 5 标签渲染
-✅ /api/state 未登录 401       ✅ /api/state 登录全量
-✅ 设置保存+生效+还原          ✅ 数据面保存+生效
-✅ 区域映射保存+生效           ✅ 手动熔断
-✅ 解除熔断                   ✅ /admin/save 未登录 401
-✅ /api/action 未登录 401      ✅ 订阅 base64（28KB）
-✅ 订阅 clash（30KB）          ✅ 订阅 singbox（46KB）
-✅ /panel  ✅ /healthz  ✅ /diag  ✅ /api/entries  ✅ /api/quality
-```
-
-### 关键修复
-| 问题 | 根因 | 修复 |
-| --- | --- | --- |
-| 只有 13 个达标 | 候选列表被默认 `limit=12` 截断 | `limit=0` 时候选全量参与 |
-| 国家不全 | ip-api 速率限制 | 三源回退（ip-api → ipinfo → ip.3322）|
-| IP 重复 | 多个域名解析到同一 IP | 按真实出口 IP 去重，保留评分最高 |
-| 订阅节点少 | 默认 limit=12 + perEntry=2 | 默认 `limit=0` 全部、`perEntry=0` 不限 |
-| 功能难理解 | 无说明 | `/panel` 使用说明 + 参数表 + FAQ |
-
-## 十六、工作原理：设置怎么生效？节点怎么抓、怎么测？
-
-### 1. 三条链路
-
-```
-① 抓取（Worker 内，请求时）
-   外部优选源(bestcf cf_domains.txt 426 条) ──┐
-   KV: preferred（实测排序的 IP）      ──┤→ 合并去重 → 候选表
-                                          │   （Cache API 缓存 10 分钟）
-
-② 测速（你的 Mac，launchd 每 2 小时）
-   tools/quality.mjs
-     对每个「数据面 × 候选」：
-       TLS+WS 握手 → VLESS 请求 204 × 3 次（延迟/抖动）
-       → 隧道下载 256KB（吞吐 KB/s）
-       → 经隧道查 geo（真实出口国家）
-       → 评分 + 分级 → 写 KV: quality
-     （Worker 本身不测速，因为它看不到你到边缘的链路）
-
-③ 出订阅（Worker 内，请求时）
-   KV: quality + settings → 过滤(门槛/时效/熔断/去重) → 排序 → 生成订阅
-     （响应缓存 60s，?nocache=1 立即生效）
-```
-
-### 2. 后台每个设置的生效方式（已实测）
-
-| 设置 | 作用点 | 实测效果（同一时刻） |
-| --- | --- | --- |
-| `minScore` | ③ 过滤 | 0→**157** 个；60→**74** 个 |
-| `minTput` | ③ 过滤 | 0→157；80→**119** 个 |
-| `perEntry` | ③ 每入口取几个 | 0→157；1→**2** 个 |
-| `limit` | ③ 输出上限 | 0→157；5→**5** 个 |
-| `maxAgeHours` | ③ 数据时效 | 168→157；1（数据新）→157 |
-| `requireQuality` | ③ 是否放行无实测 | true→157；false→**300**（上限）|
-| `sources` | ① 抓取源 | 改后下次请求生效（10 分钟缓存）|
-| `entries` | ①③ 数据面列表 | 改后立即改变节点前缀与数量 |
-| `colos` | ③ 国家名回退 | 无 geo 时用 colo 映射国家 |
-
-> 所有设置都写在 KV 的 `settings` 键；`/sub` 每次请求都会读取，
-> 只有**响应**有 60 秒缓存（`?nocache=1` 可跳过）。
-
-### 3. 节点抓取规则
-
-- **外部优选源**：默认 `https://bestcf.fxxk.dedyn.io/cf_domains.txt`（426 个优选域名），
-  可在后台 `sources` 追加任意「一行一个」的地址
-- **KV `preferred`**：实测排序后的 IP 列表
-- **合并去重**：同一值只保留一次；输出时再按**真实出口 IP** 去重
-- 只有「数据面 × 候选」在 `quality` 表里 **ok=true 且未过期** 的才会进订阅
-
-### 4. 测速评分
-
-```
-score = 延迟分×0.5 + 吞吐分×0.35 + 抖动分×0.15
-延迟分 = max(0, 100 - lat/60)   吞吐分 = min(100, KBps/2)   抖动分 = max(0, 100 - jitter/5)
-分级：S≥70 / A≥45 / B≥20 / C<20
-```
-连续失败 3 次 → 自动熔断 2 小时（`cooldownUntil`），订阅自动剔除。
-
-### 5. 定时任务（已修复）
-launchd 的 PATH 不含 Homebrew，之前报 `node: command not found`（任务实际没跑）。
-已修复：`refresh.sh` 显式补 `/opt/homebrew/bin`，并在找不到 node 时明确报错退出。
+### 3.3 初始化数据
 
 ```bash
-launchctl list | grep cfmux        # 查看状态（第二列 0 = 上次成功）
-tail -f ~/cfmux/data/refresh.log   # 查看每次刷新日志
+B=https://cfmux.pages.dev
+# 登录拿 Cookie
+curl -c /tmp/ck.txt -X POST "$B/admin/login" -d "password=<admin_password>" -o /dev/null
+# 写入数据面
+curl -b /tmp/ck.txt -X POST "$B/admin/save" -H "Content-Type: application/json" \
+  -d '{"entries":"[{\"name\":\"core1\",\"host\":\"mux-core.pages.dev\",\"uuid\":\"<UUID>\",\"path\":\"/\"}]"}'
+# 导入优选域名
+curl -b /tmp/ck.txt -X POST "$B/api/import" -H "Content-Type: application/json" \
+  -d '{"url":"https://bestcf.fxxk.dedyn.io/cf_domains.txt"}'
 ```
 
-新增合并逻辑：每轮只测 45 个候选 × 3 入口，**不会冲掉**之前的 218 条质量数据
-（未测到且 7 天内的保留）。
+### 3.4 测速（二选一）
 
-## 十七、v2.5：可操作性补全（导入 / 增删 / 手动触发 / 置顶 / 二维码）
+**A. 本机（推荐，最准）**
+```bash
+cp .refresh.env.example .refresh.env   # 填 KV_ID / ENTRIES_FILE / PREF_FILE
+echo "<report_token>" > .report_token
+./tools/refresh.sh                     # 测完自动上报
+# 定时（macOS launchd，每 2 小时）
+```
 
-### 1. 修复：数据面「添加」没反应
-根因是前端 `renderEntries()` 每次渲染都用服务端数据覆盖编辑态，刚加的行立刻被冲掉。
-已改为：编辑态 `EDIT.entries` 只在 `load()` 时初始化，增删改只操作编辑态，保存才写 KV。
-实测：添加 `core4` → `/api/state` 立即出现 4 条 → 还原后回到 3 条。
+**B. GitHub Actions（云端保活）**
+```
+仓库 Settings → Secrets: CFMUX_REPORT_TOKEN = <report_token>
+            → Variables: CFMUX_BASE = https://cfmux.pages.dev
+工作流 .github/workflows/refresh-quality.yml 已配置每 3 小时运行
+```
+只用一个自定义上报口令，**不需要把 Cloudflare Token 放进 GitHub**。
 
-### 2. 新增「⭐ 优选」标签
-| 能力 | 说明 |
+### 3.5 可选：自定义域名
+
+| 记录 | 值 |
 | --- | --- |
-| 手动编辑 | 文本框一行一个，直接粘贴 IP/域名，保存即生效 |
-| **从网址导入** | 填任意「一行一个」的列表 URL，服务端抓取解析、去重合并（实测导入 BestCF 426 条） |
-| 手动触发测速 | 调 GitHub Actions；未配置时自动复制本地命令 |
-| 实时条数 | 面板显示当前优选列表数量 |
+| CNAME `mux` → `cfmux.pages.dev` | 控制面域名（可达 `mux.<你的域名>/admin`） |
+| CNAME `core1/2/3` → `mux-core*.pages.dev` | 数据面域名（防 `pages.dev` 被污染） |
 
-### 3. 新增数据面测速状态
-数据面表格新增「测速」列：`53/53`（已测/可用）或「未测速」。
-新增数据面若还没测过，订阅不会出现它的节点——可用 `?unmeasured=1` 临时放行。
+加完后在 Pages 项目 → 自定义域 添加，然后后台「数据面」把 host 换成新域名。
 
-### 4. 新增置顶（pin）
-节点表每行「置顶」按钮 → 订阅里该节点排最前（`POST /api/action {"type":"pin","key":"host|value"}`）。
+---
 
-### 5. 新增二维码
-订阅页自动生成通用订阅二维码，手机扫码直接导入。
+## 四、订阅
 
-### 6. 订阅参数（完整）
+```
+https://<域名>/sub                     # Base64（V2Ray / Shadowrocket / v2rayN）
+https://<域名>/sub?target=clash        # Clash / Meta / Stash / Mihomo
+https://<域名>/sub?target=singbox      # sing-box
+https://<域名>/sub?target=plain        # 纯 URI 列表
+https://<域名>/sub?target=json         # JSON 节点数组
+https://<域名>/sub?target=qx           # Quantumult X
+https://<域名>/sub?target=loon         # Loon
+```
+
 | 参数 | 说明 |
 | --- | --- |
-| `target` | base64 / clash / singbox |
-| `limit` | 节点数，0=全部 |
-| `kind` | ip / domain |
+| `limit` | 节点数，0=全部（≤300） |
+| `kind` | `ip` / `domain` |
 | `cc` | 国家代码，如 `cc=SG,JP` |
 | `country` | 国家名，如 `country=新加坡` |
 | `like` | 候选值关键字 |
 | `perEntry` | 每入口取几个，0=不限 |
-| `dedup` | 0=关闭去重 |
-| `unmeasured` | 1=放行未测速的数据面 |
-| `nocache` | 1=跳过 60s 缓存 |
+| `dedup` | `0` 关闭去重 |
+| `unmeasured` | `1` 放行未测速的数据面 |
+| `nocache` | `1` 跳过 60 秒缓存 |
+| `refreshKernel` | `1` 强制重读数据面内核配置 |
 
-### 7. 与两个参考项目的功能对照（如实）
+短链：后台「订阅」页生成 `/s/<token>`，删除即失效。
 
-| 功能 | cfnew | edgetunnel | **cfmux** |
-| --- | --- | --- | --- |
-| 多协议内核（VLESS/Trojan/XHTTP） | ✅ | ✅ | ✅（直接复用完整内核） |
-| 面板改**内核参数**（UUID/路径/ProxyIP/ECH） | ✅ | ✅ | ⚠️ 未做（需到数据面控制台改变量） |
-| 优选 IP 手动导入 | 面板 | 面板 | ✅ 文本框 + URL 导入 |
-| 优选域名 | 部分 | 部分 | ✅ 426 个 + 任意自定义源 |
-| 自动测速 | 面板内置 | ❌ | ✅ 本地 launchd / CI |
-| 质量分级 + 熔断 | ❌ | ❌ | ✅ S/A/B/C + 连续失败熔断 |
-| 真实国家识别 | ❌ | ❌ | ✅ 经隧道实测出口国家 |
-| 重复 IP 去重 | ❌ | ❌ | ✅ |
-| 多数据面分摊配额 | ❌ | ❌ | ✅ 3 个 |
-| 订阅格式 | 多 | 多 | base64 / clash / singbox |
-| 二维码 | ✅ | ✅ | ✅ |
-| 节点置顶 | ❌ | ❌ | ✅ |
-| 流量统计 | 部分 | ❌ | ❌（未做） |
+---
 
-> 诚实结论：**内核参数编辑**和**流量统计**这两块我还没做；
-> 其余在「优选管理 / 质量保障 / 多入口 / 可观测」上已经强于两个参考项目。
+## 五、后台（`/admin`）
 
-## 十八、v2.6：用真实浏览器验证后台（并修复了致命 JS 错误）
-
-### 发现的真问题
-之前所有后台验证都是 `curl` 看 HTML，**测不出页面 JS 是否报错**。
-用 Playwright 打开后发现：
-
-```
-PAGEERROR: Invalid or unexpected token
-→ STATE 未定义 → 概览 0 卡片、节点表 0 行、所有按钮无反应
-```
-
-两个原因，都在 Worker 的模板字符串里：
-
-1. `split('\n')` 在模板字符串中被提前转义成**真实换行** → 浏览器端字符串未闭合
-2. `onclick="act(\'ban\',…)"` 反斜杠转义在模板里多了一层 → 语法错误
-
-### 修复
-- 换行改用 `\\n`（模板输出 `\n`）
-- 按钮事件改为 **`data-act` / `data-key` + 事件委托**，彻底不写转义：
-
-```html
-<button class="btn danger" data-act="ban" data-key="host|ip" onclick="doAct(this)">熔断</button>
-```
-
-### 浏览器端到端验证（Playwright，12/12 通过，控制台 0 错误）
-
-| 检查项 | 结果 |
+| 标签 | 能做什么 |
 | --- | --- |
-| 登录进入仪表盘 | ✅ 6 个标签 |
-| 概览指标卡 | ✅ 7 张卡（含国家分布） |
-| 节点质量表 | ✅ 160 行 |
-| 关键字筛选（中文国家） | ✅ 筛「新加坡」→ 53 行 |
-| 订阅二维码 | ✅ 生成 |
-| 优选列表加载 | ✅ 436 条 |
-| 从网址导入 | ✅ 成功 |
-| 点击「+ 添加数据面」 | ✅ 4 → 5 行 |
-| 数据面保存 | ✅ 已保存 |
-| 设置保存 | ✅ 已保存 |
-| 设置写入 KV | ✅ minScore=55 生效 |
-| 新数据面写入 KV | ✅ entries=4 |
+| 概览 | 指标卡、国家分布、节点生成漏斗、评分趋势、Top 节点 |
+| 节点质量 | 全量节点表（筛选/排序）、置顶、熔断/解除 |
+| 订阅 | 7 种订阅地址、二维码（本地生成）、短链管理 |
+| 优选 | 手动编辑、从网址导入、手动触发测速 |
+| 内核 | 读取/修改数据面内核（协议开关、路径、ProxyIP、ECH…） |
+| 流量 | 请求量统计（近似）、7 天柱状图 |
+| 数据面 | 增删改（host/uuid/路径），显示测速覆盖情况 |
+| 设置 | 质量门槛、淘汰参数、通知（Telegram/Webhook）、区域映射 |
 
-截图：`/tmp/ui_overview.png`、`/tmp/ui_nodes.png`、`/tmp/ui_preferred.png`
+公开页：`/panel`（状态）、`/api/stats`（漏斗）、`/api/quality`（质量排行）。
 
-### 顺带修复
-- 节点筛选现在支持**中文国家名**（筛「新加坡」能命中 `cc=SG` 的节点）
-- 趋势图纵轴改为自适应（原来几乎拉平）
-- 修复趋势图变量重名（`pad` 重复声明导致再次语法错误）——这次先在本地对
-  「模板渲染后的浏览器 JS」跑 `node --check` 再部署，避免同类问题
+---
 
-## 十九、v2.7：交互反馈重做 + 内核配置 + 流量统计 + 自定义域名
+## 六、配置速查
 
-### 1. 所有操作都有明确反馈（本次重点）
+**环境变量（控制面）**
 
-之前的问题：点了保存看起来没反应（其实 POST 要 2–4 秒，且 toast 太小、1.8 秒就消失）。
-
-现在的反馈链：
-
-| 机制 | 说明 |
-| --- | --- |
-| 按钮忙碌态 | 点击后立刻变成「保存中…」并禁用，完成恢复 |
-| 内联状态 | 按钮右侧常驻 `已保存 12:09:30 AM` / `保存失败：原因` |
-| 顶部大提示 | 屏幕上方居中绿色/红色横幅，3 秒，带 ✓/✗ |
-| 复制兜底 | `navigator.clipboard` 不可用时自动降级 `execCommand('copy')`，成功/失败都提示 |
-| 保存后自动刷新 | 保存成功立即重拉状态，界面数值同步更新 |
-
-实测（Playwright 真浏览器点击）：**12/13 通过**，唯一「失败」是"没有修改任何字段"的正确提示。
-
-### 2. 内核配置管理（新标签「🧠 内核」）
-- 选择数据面 → **读取配置** → 表单化编辑 → **保存到数据面**（立即生效）
-- 可改：VLESS-WS / Trojan-WS / XHTTP / ECH 开关、自定义路径 `d`、ProxyIP `p`、Trojan 密码 `tp`、
-  自定义 DNS、ECH 域名、伪装首页、订阅转换后端
-- 底部保留**原始 JSON**（高级用户可改任意字段）
-- 实现要点：内核只接受白名单字段，因此保存时**只提交改动项**（diff），整包会被拒（`配置格式无效`）
-- 实测：把 `customDNS` 改为 `https://1.1.1.1/dns-query` → 数据面确认生效 → 再改回
-
-### 3. 流量统计（新标签「📈 流量」）
-- 今日请求 / 每日配额 / 使用率 / 近 7 天总量
-- 7 天柱状图 + 明细表（代理 WS / 订阅 / 其它）
-- 计数方式：Worker 内内存累计，**攒够 20 次或满 5 分钟**落一次 KV（避免免费版 KV 每天 1000 次写限制）
-- ⚠️ 标注为**近似值**（多 isolate 各自累计会有偏差），真实账单以 Cloudflare 控制台为准
-
-### 4. 自定义域名（已回答）
-**可以**。已通过 Pages API 给项目添加 `mux.moneyfly.club`：
-
-```
-POST /accounts/{acc}/pages/projects/cfmux/domains  {name:"mux.moneyfly.club"}
-→ 201, status: pending
-```
-
-但当前 API Token **没有 DNS 权限**（`Authentication error`），需要你补一条记录：
-
-| 类型 | 名称 | 目标 | 代理 |
-| --- | --- | --- | --- |
-| CNAME | mux | cfmux.pages.dev | ✅ 开启（橙色云） |
-
-配好后访问 `https://mux.moneyfly.club/admin` 即可。
-（若愿意给一个带 `Zone:DNS:Edit` 的 Token，我可以直接帮你建记录并验证。）
-
-## 二十、v2.8：节点数修复 · 全格式订阅 · 自定义域名上线
-
-### 1. 「达标很多但订阅很少」的根因（已修）
-两个真 bug：
-
-| 问题 | 原因 | 修复 |
+| 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| 订阅只出 3 个节点 | KV 里 `perEntry=1`（早期测试残留），每个数据面只取 1 个 | 重置为 0（每入口全量） |
-| `?limit=50` 反而更少 | `limit` 被误用于**裁剪候选**，候选少了质量过滤后自然更少 | `limit` 只控制输出数量，候选改由 `cand` 控制 |
+| `uuid` | ✅ | 数据面 UUID（单数据面时兜底） |
+| `admin_password` | ✅ | 后台密码；不设则后台关闭 |
+| `report_token` | 推荐 | 上报口令（CI/本机写质量） |
+| `gh_token` / `gh_repo` | 可选 | 「手动触发测速」按钮（Actions workflow_dispatch） |
+| `KV` 绑定 | ✅ | 存储 entries/preferred/quality/… |
 
-修复后实测：**108 个节点**（pass 147 → 去重 39 → 输出 108）。
+**设置项（后台可改，存 KV `settings`）**
 
-### 2. 订阅格式补全（7 种）
-
-| 格式 | 参数 | 说明 |
+| 键 | 默认 | 作用 |
 | --- | --- | --- |
-| Base64 通用 | 默认 | V2Ray / Shadowrocket / v2rayN |
-| Clash / Meta / Stash / Mihomo | `target=clash` | 含 url-test + fallback 组 |
-| sing-box | `target=singbox` | urltest 自动测速 |
-| 原始 URI 列表 | `target=plain` | 纯文本，便于二次处理 |
-| JSON | `target=json` | 自建客户端/脚本用 |
-| Quantumult X | `target=qx` | `vless=...obfs=wss` 行 |
-| Loon | `target=loon` | `name = VLESS,...` 行 |
-| Surge | `target=surge` | **不支持 VLESS**，返回说明（需开启 Trojan-WS） |
+| `minScore` / `minTput` | 0 / 0 | 评分、吞吐下限 |
+| `maxAgeHours` / `softExpireDays` | 168 / 30 | 数据新鲜 / 硬过期（天） |
+| `limit` / `perEntry` | 0 / 0 | 输出上限 / 每入口取几个 |
+| `pruneStrikes` / `pruneFloor` / `banHours` | 4 / 120 / 72 | 自动淘汰规则 |
+| `autoPromote` / `promoteMinScore` | true / 55 | 高分自动进入优选池 |
+| `tg_token` / `tg_chat` / `webhook_url` | — | 告警通知 |
 
-实测各格式节点数一致：108 个（base64 31KB / clash 35KB / singbox 52KB / qx 24KB / loon 21KB）。
+---
 
-### 3. 自定义域名（已上线）
-- 通过 Pages API 添加 `mux.moneyfly.club`
-- DNS CNAME：`mux` → `cfmux.pages.dev`（proxied）
-- 验证：`https://mux.moneyfly.club/admin` / `/panel` / `/sub` 均 200
+## 七、常见问题
 
-> Pages 控制台状态可能短暂显示 `pending`，实际已可访问（证书签发有延迟）。
+**订阅提示「没有达标节点」？**
+① 看 `/api/stats` 的 candidates 是否为 0（数据面没配好或 KV 读抖动）；
+② 看 quality 是否有数据（没跑过测速）；
+③ 门槛是否过严（`minScore` 太高）。
+系统已有「上次成功结果」兜底（24h），一般不会空着。
 
-### 4. 测速原理与 Token（回答）
-- **测速在哪里跑**：不在 Worker 里，而是在**你的 Mac**（launchd 每 2 小时）或 GitHub Actions。
-  Worker 看不到「你的网络 → Cloudflare 边缘」这一段链路，只有客户端侧才能测准。
-- **测什么**：对「数据面 × 候选入口」逐个做 TLS+WS 握手 → VLESS 请求 204 ×3（延迟/抖动）
-  → 隧道下载 256KB（吞吐）→ 经隧道查出口国家 → 评分分级 → 写 KV。
-- **为什么要 Token**：「手动触发测速」按钮是通过 **GitHub Actions workflow_dispatch** 触发的，
-  调 GitHub API 必须带 Token；不配就走本地命令（按钮会自动复制命令给你）。
-- **cfnew 怎么测**：它的面板自己跑测速（面板服务器视角），或直接用第三方优选列表；
-  两者都不是「你的网络」视角，所以会出现"面板显示快、实际慢"。
+**节点数比“达标节点”少？**
+同出口 IP 去重是主因，其次 `perEntry`/`limit`/国家筛选。
 
-### 5. 环境变量一览（触发器相关）
-| 变量 | 作用 |
-| --- | --- |
-| `gh_token` | GitHub PAT（仅需 actions:write） |
-| `gh_repo` | `owner/repo`，如 `moneyfly006/cfmux` |
-| `gh_workflow` | 默认 `refresh-quality.yml` |
-| `gh_ref` | 默认 `main` |
+**节点名显示「IP / 域名」而不是国家？**
+该组合没取到出口 IP。重跑测速即可补齐（批量地理二次解析）。
 
-## 二十一、v2.9：订阅节点数修复验证 · 二维码本地生成
+**电脑关机还会掉订阅吗？**
+不会。订阅由 Cloudflare 生成；只是质量数据不再更新，超过 30 天才逐步丢弃。
+云端 Actions（3 小时）可以完全替代本机。
 
-### 最终实测
-```
-候选 436 → 通过 147 → 去重 39 → 输出 108 个节点
-格式：base64 31KB / clash 35KB / singbox 52KB / plain 23KB / json 22KB / qx 25KB / loon 21KB
-```
+**改了内核路径，订阅会跟着变吗？**
+会。订阅生成时会读内核配置（KV 镜像 `kcfg:<host>`），协议开关与 WS 路径都会同步。
 
-### 二维码改为本地生成
-外部二维码服务（api.qrserver.com）在部分网络下会 404/超时，导致二维码空白。
-现在优先用 `qrcode-generator`（jsdelivr 1.4.4）在浏览器内生成 **内联 SVG**，无外部依赖；
-CDN 不可用时才回退到图片接口。实测：`#qr-local` 内为 `<svg>`，控制台 0 错误。
+---
 
-### 部署前校验
-新增 `tools/check-dash.js`：渲染 DASHBOARD_HTML → 提取 `<script>` → `node --check`。
-这次靠它抓到并修复了两处模板转义错误（`copy('sl-'+i+'')`、多余花括号）。
-
-### 自定义域名（已上线并验证）
-```
-mux.moneyfly.club  CNAME → cfmux.pages.dev (proxied)
-https://mux.moneyfly.club/admin   → 200
-https://mux.moneyfly.club/panel   → 200
-https://mux.moneyfly.club/sub     → 200（limit=5 时返回 5 个节点）
-```
-
-## 二十二、节点生成原理（精确版）★
-
-### 1. 四类输入
-
-| 符号 | 名称 | 存在哪 | 内容 |
-| --- | --- | --- | --- |
-| `E` | entries 数据面 | KV `entries` | `{name, host, uuid, path}` |
-| `C` | candidates 优选入口 | KV `preferred` + `sources` | IP / 域名列表 |
-| `Q` | quality 实测表 | KV `quality` | `"host|cand" → {ok,score,tput,lat,jitter,cc,ts,cooldownUntil}` |
-| `K` | kernel 内核配置 | KV `kcfg:<host>`（面板保存时镜像） | `{ev,et,ex,ech,d,p,tp,...}` |
-
-### 2. 生成流程（严格顺序）
+## 八、目录
 
 ```
-① 内核闸门 —— 决定「这个入口能不能出节点、出什么协议、用什么路径」
-   if (K.ev !== 'yes') && (K.et !== 'yes' || !K.tp)  → 跳过整个入口
-   proto = (K.ev === 'yes') ? 'vless' : 'trojan'
-   path  = K.d || '/'          ← 订阅路径跟随内核配置
-
-② 质量闸门 —— 决定「这个组合要不要」
-   必须存在 Q[host|cand]（requireQuality=true 时）
-   且：ok=true 且 未熔断(cooldownUntil<now) 且 score≥minScore
-       且 tput≥minTput 且 age≤maxAgeHours
-
-③ 后处理
-   dedup    同 exitIp/resolved 只留评分最高的一条
-   perEntry 每个入口取 topK（0=不限）
-   sort     pinned 优先，其余按 score 降序
-   limit    截断输出（只影响输出，不影响候选）
-
-④ 格式化  base64 / clash / singbox / plain / json / qx / loon
+src/index.js             控制面（路由/订阅/后台/API/内核代理/通知）
+tools/quality.mjs        测速引擎（延迟/抖动/吞吐/国家/评分/看门狗）
+tools/refresh.sh         本机定时刷新（测速 + 上报 + 历史曲线）
+tools/deploy.sh          安全部署（Worker 语法 + 渲染后浏览器 JS 双校验）
+tools/check-dash.js      渲染 /admin 并校验内联脚本
+tools/measure.mjs        简易测速（早期版本，保留）
+tools/colos.mjs          数据中心探测
+.github/workflows/       云端定时测速
+docs/architecture.png    架构图
+docs/HISTORY.md          详细开发记录（v1.x ~ v3.x）
 ```
 
-### 3. 两个关键结论（直接回答疑问）
+## 九、安全说明
 
-**Q：订阅出的是「测速之后的节点」还是「按内核配置出的节点」？**
-两个都是，但是分层的：
-
-- **内核配置决定"节点长什么样"**：协议（VLESS/Trojan）、WS 路径、该入口是否出现
-- **质量表决定"要不要它、排第几"**：只有实测达标且未过期的组合才输出
-
-**Q：为什么"达标节点"很多，订阅却少？**
-
-```
-候选 436（3 数据面 × 145 入口）
-  → 通过质量门槛 159
-  → 去重 -51（同一出口 IP 只留一条；这是主要差额）
-  → 最终输出 108
-```
-仪表盘「概览」已把这条漏斗显示出来（`/api/stats`）。
-
-### 4. 实测证据（内核 ↔ 订阅联动）
-
-| 实验 | 操作 | 订阅结果 |
-| --- | --- | --- |
-| 改路径 | mux-core `d=/zz9` | `mux-core.pages.dev → /zz9?ed=2048`；另两个入口仍是 `/?ed=2048` |
-| 关协议 | mux-core `ev=no` | mux-core 节点**全部消失**，仅剩 core2/core3 |
-| 恢复 | `ev=yes, d=/` | mux-core 节点恢复 |
-
-### 5. 实现细节（踩过的坑）
-
-- 内核的 `POST /api/config` **只接受白名单字段**，整包提交会返回「配置格式无效」
-  → 面板保存时只提交**改动字段**（diff）
-- 内核配置在 **isolate 内有缓存**，写完立即读可能拿到旧值
-  → 面板保存成功后把「基线 + 我们提交的补丁」镜像到 KV `kcfg:<host>`，
-  订阅以镜像为准（`?refreshKernel=1` 可强制实时拉取）
-- 内核保存空字符串表示「删除该字段」，所以改回默认路径应写 `/` 而不是空串
-
-### 6. 部署前双重校验（防止再把页面改坏）
-```bash
-./tools/deploy.sh
-# 1) node --check src/index.js
-# 2) tools/check-dash.js 渲染模板 → 提取 <script> → node --check
-# 3) wrangler pages deploy
-```
-
-## 二十三、整条链路图（一张图看懂）
-
-![架构图](docs/architecture.png)
-
-### 阶段 0：部署了什么（两套独立部署）
-
-| 部署 | 地址 | 职责 | 是否转发流量 |
-| --- | --- | --- | --- |
-| **控制面** | `cfmux.pages.dev` / `mux.moneyfly.club` | 后台、订阅、统计、内核代理 | ❌ 不转发 |
-| **数据面** | `mux-core.pages.dev`、`-2`、`-3` | VLESS/Trojan 解析 + `connect()` 转发 | ✅ 真正转发 |
-| **KV** | cfmux 项目的 KV | entries/preferred/quality/kcfg/settings | — |
-| **测速机** | 你的 Mac（launchd） | 实测质量 → 写 KV | ❌ |
-
-### 阶段 1：配置（你在后台操作）
-```
-改设置   → POST /admin/save  → 写 KV settings
-导优选   → POST /api/import  → 抓取列表 → 写 KV preferred
-改内核   → POST /api/kernel  → 转发到数据面 + 写 KV kcfg:<host>
-加数据面 → POST /admin/save  → 写 KV entries
-```
-
-### 阶段 2：测速（Mac，每 2 小时）
-```
-quality.mjs
-  for 每个数据面 × 每个优选入口:
-     TLS+WS 握手 → 204×3（延迟/抖动）→ 下载 256KB（吞吐）→ 查出口国家
-     → 评分 S/A/B/C → 写 KV quality["host|入口"]
-举例：mux-core × skk.moe → 延迟 803ms、吞吐 142KB/s、出口 US → 68 分 A
-```
-
-### 阶段 3：订阅（客户端扫码/导入）
-```
-客户端 GET https://cfmux.pages.dev/sub
-  → 控制面读 KV（entries + preferred + quality + kcfg + settings）
-  → 内核闸门（协议/路径）→ 质量闸门（评分/时效/熔断）→ 去重 → 排序 → 截断
-  → 输出 108 个节点（base64 / clash / singbox / …）
-```
-
-### 阶段 4：真正上网（一次请求的完整路径）
-```
-① 客户端选节点：vless://<uuid>@104.17.2.1:443?host=mux-core.pages.dev&path=/?ed=2048
-② 客户端 TLS 连 104.17.2.1:443，SNI = mux-core.pages.dev
-③ CF 边缘按 Host 路由到 mux-core 这个 Pages 项目的 Worker
-④ Worker 从 WebSocket 帧里解出 VLESS 头：目标 www.google.com:443
-⑤ Worker 用 connect() 建 TCP，双向 pipe 转发
-⑥ 响应原路返回：Worker → CF 边缘 → 客户端
-```
-
-### 关键理解（容易混淆的三点）
-
-1. **订阅里的 `server` 是「入口 IP」，不是出口**
-   同一个入口 IP 路由到哪个数据面，由 `host/SNI` 决定；出口在哪，由数据面 Worker 所在机房决定（测出来的国家）。
-
-2. **一个订阅能有 108 个节点**
-   3 个数据面 × 各自通过质量门槛的入口；去重后同一个出口 IP 只留评分最高的一条。
-
-3. **四段链路哪段决定快慢**
-   | 段 | 路径 | 由什么决定 |
-   | --- | --- | --- |
-   | A | 你 → CF 边缘 IP | **优选入口**（测速表的延迟） |
-   | B | 边缘 → Worker | CF 内部，通常 <5ms |
-   | C | Worker → 目标 | **落地机房**（测速表的国家/吞吐） |
-   | D | 目标 → 你 | 原路返回 |
-
-## 二十四、自动化链路（v3.1）：自动收录 → 自动测速 → 国家名节点
-
-### 1. 三个自动环节
-
-| 环节 | 触发 | 做什么 |
-| --- | --- | --- |
-| **自动收录** | 每次 `/sub` 读取时 + 每次上报后 | 外部优选源（BestCF 426 域名）与 `preferred` 合并；上报时把 **score≥55** 的入口自动写入 `preferred`（去重、上限 200） |
-| **自动测速** | 本机 launchd 每 2h · 云端 GitHub Actions 每 3h | 对「数据面 × 候选入口」实测，写回 KV `quality` |
-| **自动出订阅** | 客户端请求 `/sub` | 内核闸门 → 质量闸门 → 去重 → 排序 → 生成带国家名的节点 |
-
-### 2. 云端保活（不需要你开机）
-`refresh-quality.yml` 每 3 小时在 GitHub Actions 上跑：
-
-```
-① GET /api/quality/entries  (上报口令)  → 拿到数据面 host/uuid
-② GET /api/entries?limit=200 (公开)      → 自动拿到全部候选（含新收录域名）
-③ 实测 entries × candidates
-④ POST /api/quality/report  (上报口令)   → 合并进 KV quality
-```
-
-只用一个自定义 `report_token`，**不需要把 Cloudflare Token 放进 GitHub**。
-实测：一次跑 120 组合、耗时 8m57s、上报成功、订阅从 108 → **175 节点**。
-
-### 3. 国家名节点（当前实测）
-```
-节点 167 个，国家分布：
-美国 68 · 新加坡 44 · 日本 29 · 荷兰 10 · 瑞典 10
-德国 1 · 西班牙 1 · 英国 1 · 法国 1 · 未识别 2
-国家识别率：165/167 ≈ 98.8%
-```
-补齐手段：隧道内三家 geo（ip-api → ipinfo → IP-only 源）+ 隧道外 `ip-api/batch` 二次解析出口 IP
-（只补 `cc/country/city`，**不覆盖**原有评分与吞吐）。
-
-### 4. 内核设置仍决定节点形态
-| 内核项 | 影响 |
-| --- | --- |
-| `ev=no` 且无 Trojan | 该数据面**不产生任何节点** |
-| `d=/zz9` | 该数据面所有节点订阅路径变 `/zz9?ed=2048` |
-| `et=yes` + `tp` | 生成 Trojan 节点，名字带 `-T` 标记 |
-| `ech=yes` | 记录在配置镜像中，供后续节点参数扩展 |
-
-### 5. 与「原项目」的关系（定位）
-- **数据面**：直接使用 cfnew 完整内核（VLESS/Trojan/XHTTP/ECH/ProxyIP 全保留），不魔改
-- **控制面**：本项目新增——自动优选、实测分级、国家识别、去重、多入口、后台、多格式订阅
-- 即：**在原项目能力之上加了一层“质量与自动化”**
-
-## 二十五、v3.2：四项打磨完成并验收
-
-### ① CI 也测吞吐（确认已有）
-GitHub Actions 跑的是完整模式（非 `--fast`），吞吐正常采集：
-```
-质量表 237 条 · 有吞吐 205 条 · 中位数 211 KB/s
-```
-
-### ② 节点名带协议 / ECH 标记
-格式：`国家-数据面-序号[协议标记]-等级-延迟`
-
-| 标记 | 含义 |
-| --- | --- |
-| `[V]` | VLESS-WS |
-| `[T]` | Trojan-WS（内核 `et=yes` 且 `ev=no`）|
-| `[V+E]` | VLESS + ECH 已开启（内核 `ech=yes`）|
-
-实测样例：
-```
-美国-core-18[V+E]-S-83ms
-美国-core2-77[V]-S-98ms
-德国-core2-106[V]-S-72ms
-```
-
-### ③ 自动淘汰（保守版，可调参）
-规则：候选本轮取「各数据面最低分」→ 落在**底部 25%** 记 1 次 → **连续 4 轮**且可用候选数 > 120 才淘汰。
-淘汰 = 写入 `banned` 表（默认 72 小时）+ 移出 `preferred`；**分数回到中位数以上会自动解封**。
-
-> 关键修复：只删 `preferred` 没用，因为候选还会从外部优选源重新进来——
-> 所以淘汰必须落到 `banned` 表，订阅生成时直接过滤。
-
-后台可调：`pruneStrikes` / `pruneFloor` / `banHours` / `promoteMinScore`。
-
-实测：
-```
-3 轮低分上报 → banned 含 time.is=True → 订阅里 time.is 节点数 0
-上报高分 99   → banned 总数 19→18，自动解封
-伪造短链 token → 404
-```
-
-### ④ 订阅短链
-```
-POST /api/shortlink  {"query":"target=singbox&limit=5"}
-→ https://cfmux.pages.dev/s/1b06123y54
-→ 302 → /sub?target=singbox&limit=5 → 有效 singbox 配置（7 outbounds）
-```
-- 短链存 KV `short:<token>`，删除即失效
-- 后台「订阅」页可直接生成并复制
-
-### 当前订阅状态
-```
-候选 433 → 通过 174 → 去重 35 → 输出 139 个节点
-国家：美国 64 · 日本 28 · 新加坡 22 · 荷兰 9 · 瑞典 9
-      德国 1 · 西班牙 1 · 英国 1 · 法国 1 · 未识别 3
-```
-（节点数从 167 降到 139，是因为 18 个低效候选处于 72 小时封禁期，到期自动重测回归）
-
-## 二十六、v3.3：短链管理 · 数据面自定义域名 · 异常通知
-
-### 1. 短链管理（列表 / 复制 / 删除）
-- `GET /api/shortlinks` 列出全部短链（KV prefix 扫描）
-- `DELETE /api/shortlinks?del=<token>` 删除即失效
-- 后台「订阅」页内置表格：短链 / 参数 / 创建时间 / 复制 / 删除
-
-实测：
-```
-生成 → /s/20103x5e4w
-列表 → 3 条
-删除 → {"ok":true,"deleted":"20103x5e4w"}
-访问 → 404
-```
-
-### 2. 数据面挂上自定义域名（防 pages.dev 被封）
-| 域名 | 指向 | 状态 |
-| --- | --- | --- |
-| `core1.moneyfly.club` | `mux-core.pages.dev` | 200 ✅ |
-| `core2.moneyfly.club` | `mux-core-2.pages.dev` | 200 ✅ |
-| `core3.moneyfly.club` | `mux-core-3.pages.dev` | 200 ✅ |
-
-迁移动作：entries 换成新域名 + 质量表键镜像（`mux-core.pages.dev|X` → `core1.moneyfly.club|X`，237 条）。
-实测节点直连：**204 → 204（2.88s），google → 302，0 错误**。
-
-### 3. 异常通知（Telegram / Webhook）
-- 配置：`tg_token` + `tg_chat`，或任意 `webhook_url`（POST `{text}`）
-- 测试按钮：`POST /api/notify/test`
-- 自动告警：单次上报失败率 **≥40%**（且 ≥10 个组合）时推送
-- 节流：10 分钟内只发一次
-
-实测：
-```
-未配置 → {"ok":false,"msg":"未配置通知渠道"}
-配置 webhook → {"ok":true,"results":["webhook:ok"]}
-模拟 12 个全失败 → {"alerted":true}
-```
-
-### 4. 部署校验升级（重要）
-之前 `check-dash.js` 检查的是**模板源码**，而 `\'`、`\n` 这类转义在运行时才展开，
-所以校验通过但线上仍可能语法错误。
-
-现在改为：**真正调用 Worker 渲染 `/admin`**（mock env）→ 拿浏览器实际收到的 HTML → 提取 `<script>` → `node --check`。
-这次正是靠新校验发现了短链列表按钮的转义错误。
-
-### 5. 当前状态
-```
-订阅：候选 433 → 通过 174 → 去重 35 → 输出 139 节点
-数据面：core1/core2/core3.moneyfly.club（3 个自定义域名）
-控制面：cfmux.pages.dev + mux.moneyfly.club
-界面回归：12/13（唯一“失败”为未修改时正确提示），0 页面错误
-```
-
-## 二十七、v3.4：修复「订阅提示没有达标节点」
-
-### 现象
-`https://mux.moneyfly.club/sub` 在 v2rayN 提示「没有达标节点」，而同一时刻另一个域名正常。
-
-### 两个根因
-
-**根因一：本机定时刷新把质量表整体覆盖了**
-`tools/refresh.sh` 用的是 `PUT /kv/quality`（整体替换），而它读的 `data/entries.json`
-还是旧的 `mux-core.pages.dev` 清单。数据面切到 `core1/2/3.moneyfly.club` 后，
-每 2 小时一次的本地刷新都会把"自定义域名"的质量数据冲掉，只剩 pages.dev 的。
-
-修复：
-- `refresh.sh` 改为调用 `POST /api/quality/report`（**合并语义**）
-- 本机 `entries.json` 同步为当前数据面
-- 清理了一个空 host 的测试数据面
-
-**根因二：Cloudflare KV 边缘一致性**
-KV 是最终一致的，不同边缘节点可能读到不同快照。实测同一个 URL：
-```
-SJC 节点：candidates=433 → 正常
-AMS 节点：candidates=0   → 报"没有达标节点"
-```
-60 秒后自动恢复。
-
-修复：新增**上次成功结果兜底**
-- 每次生成成功的订阅写入 KV `lg:<hash>`（保留 24 小时）
-- 若本次生成 0 节点，直接返回上次成功结果，响应头标记：
-  ```
-  x-cfmux-fallback: last-good
-  x-cfmux-fallback-age: 0m
-  ```
-
-### 验证
-```
-cfmux.pages.dev/sub      → 96 节点 ✅
-mux.moneyfly.club/sub    → 96 节点 ✅
-门槛调到不可能达标        → 200 + x-cfmux-fallback: last-good ✅
-```
+- 后台 Cookie = `SHA-256("cfmux|密码")`，HttpOnly + Secure + SameSite=Lax，7 天
+- 登录失败 5 次锁定 10 分钟（按 IP）
+- 上报接口用独立 `report_token`，与后台密码分离
+- 导入接口只允许 http/https 公网地址（拒绝内网/元数据地址）
+- 敏感配置（Telegram Token 等）存 KV，只能通过你的账号读取
+- 建议：自定义域名 + 强密码 + 定期轮换 `report_token`

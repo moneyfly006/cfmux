@@ -3,15 +3,16 @@
 # 用法: ./tools/refresh.sh
 # 依赖: ~/cf-deploy/.cf.env (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID)
 set -euo pipefail
-cd "$(dirname "$0")/.."
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_DIR"
 # launchd/cron 的 PATH 通常不含 Homebrew，这里显式补上
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 command -v node >/dev/null || { echo "找不到 node，请检查 PATH"; exit 127; }
 set -a
 . "${ENV_FILE:-$HOME/cf-deploy/.cf.env}"
-[ -f "$HOME/cfmux/.refresh.env" ] && . "$HOME/cfmux/.refresh.env"
+[ -f "$REPO_DIR/.refresh.env" ] && . "$REPO_DIR/.refresh.env"
 set +a
-KV_ID="${KV_ID:?请设置 KV_ID（cfmux 项目的 KV 命名空间 id）}"
+KV_ID="${KV_ID:-}"   # 仅用于追加 history 曲线，可留空
 PREF="${PREF_FILE:-/tmp/pref.txt}"
 ENT="${ENTRIES_FILE:?请设置 ENTRIES_FILE（entries.json 路径）}"
 OUT="${OUT_FILE:-/tmp/quality.json}"
@@ -33,8 +34,9 @@ head -20 "$LIST" | sed 's/^/     /'
 node tools/quality.mjs --entries "$ENT" --preferred "$LIST" --out "$OUT" --timeout 9000 --bytes 262144
 
 echo "[*] 上报到面板（合并语义，避免覆盖云端已有数据）…"
-REPORT_TOKEN="${REPORT_TOKEN:-$(cat "$HOME/cfmux/.report_token" 2>/dev/null || true)}"
+REPORT_TOKEN="${REPORT_TOKEN:-$(cat "$REPO_DIR/.report_token" 2>/dev/null || true)}"
 BASE="${BASE:-https://cfmux.pages.dev}"
+if [ -z "$REPORT_TOKEN" ]; then echo "[!] 缺少 REPORT_TOKEN（写入 $REPO_DIR/.report_token 或设环境变量）"; exit 2; fi
 python3 - "$OUT" "$BASE" "$REPORT_TOKEN" <<'PY2'
 import json, sys, subprocess
 out, base, tok = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -46,7 +48,8 @@ r = subprocess.run(["curl","-sS","--max-time","60","-X","POST", base + "/api/qua
 print("  上报结果:", (r.stdout or "").strip()[:200])
 PY2
 
-# 追加历史点（供后台趋势图）
+# 追加历史点（供后台趋势图，需要 KV_ID）
+if [ -n "$KV_ID" ]; then
 python3 - "$OUT" <<'PY' || true
 import json, os, sys, subprocess, time
 out = json.load(open(sys.argv[1]))
@@ -65,4 +68,5 @@ subprocess.run(["curl","-sS","--max-time","20","-X","PUT",base,"-H",f"Authorizat
                 "-H","Content-Type: application/json","--data-binary",json.dumps(hist)],capture_output=True)
 print("[*] history 已追加:", pt)
 PY
+fi
 echo "[+] 完成：$(date '+%F %T')"

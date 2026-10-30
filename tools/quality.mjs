@@ -176,6 +176,21 @@ async function resolveIp(host) {
 }
 
 async function measureOne(e, ip) {
+  // 单组合看门狗：超过 COMBO_MS 直接放弃，避免个别目标把整轮拖死
+  const COMBO_MS = +(args.comboTimeout || 45000);
+  let done = false;
+  const watchdog = new Promise((resolve) => setTimeout(() => { if (!done) resolve('__timeout__'); }, COMBO_MS));
+  const result = await Promise.race([measureOneInner(e, ip), watchdog]);
+  if (result === '__timeout__') {
+    done = true;
+    const key = `${e.host}|${ip}`;
+    out[key] = { ok: false, err: 'combo timeout', ts: Date.now(), fails: ((PREV[key] && PREV[key].fails) || 0) + 1, score: 0, tier: 'C' };
+    console.log(`⏱️ ${e.host.replace('.pages.dev','')} @ ${ip.padEnd(26)} 超时跳过（>${COMBO_MS}ms）`);
+  }
+  done = true;
+}
+
+async function measureOneInner(e, ip) {
   const resolved = await resolveIp(ip);
   const lat = []; let lastErr = null;
   const rounds = FAST ? 1 : 3;
