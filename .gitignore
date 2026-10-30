@@ -1,4 +1,5 @@
 node_modules/
-preferred.json
-dist/
+data/
+.refresh.env
+.report_token
 .wrangler/
