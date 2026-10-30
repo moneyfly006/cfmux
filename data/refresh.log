@@ -846,3 +846,206 @@
 {"result":null,"errors":[],"messages":[],"success":true}
 [*] history 已追加: {'ts': 1793325411082, 'ok': 159, 'total': 159, 'avg': 68.3, 'best': 95.9, 'dead': 0}
 [+] 完成：2026-10-30 09:56:53
+[*] 实测清单：45 条（IP + 域名）
+     103.21.244.1
+     104.16.3.1
+     104.17.2.1
+     104.25.1.1
+     188.114.97.1
+     ahrefs.com
+     api.gzcrtw.com
+     auto.dolby.dpdns.org
+     baota.us.kg
+     bbs.alipansou.com
+     cdn.204910.best
+     cdn.555586.xyz
+     cdn.667891.xyz
+     cdn.7zz.cn
+     cdn.cnno.de
+     cdn.ctn32.us.kg
+     cdn.ddeed.de
+     cf.254301.xyz
+     cf.877774.xyz
+     cf.nyanya.moe
+✅ core1.moneyfly.club @ 104.17.2.1                 lat=  921 jit= 190 tput=  202KB/s score= 86.63 S US/East Los Angeles 
+✅ core1.moneyfly.club @ 104.25.1.1                 lat= 1073 jit=  46 tput=  149KB/s score= 80.75 S NL/Amsterdam 
+✅ core1.moneyfly.club @ 103.21.244.1               lat=  923 jit=2297 tput=  160KB/s score= 70.31 S US/East Los Angeles 
+✅ core1.moneyfly.club @ ahrefs.com                 lat=  677 jit= 658 tput=  124KB/s score= 66.06 A SG/Singapore 
+✅ core1.moneyfly.club @ 188.114.97.1               lat=  898 jit= 239 tput=  111KB/s score= 69.77 A NL/Amsterdam 
+⏱️ core1.moneyfly.club @ 104.16.3.1                 超时跳过（>45000ms）
+✅ core1.moneyfly.club @ api.gzcrtw.com             lat=  487 jit=1103 tput=    0KB/s score= 45.94 A JP/Narita 
+✅ core1.moneyfly.club @ baota.us.kg                lat=  734 jit= 746 tput=   67KB/s score= 55.61 A JP/Narita 
+✅ core1.moneyfly.club @ auto.dolby.dpdns.org       lat=  565 jit= 182 tput=    0KB/s score= 54.83 A JP/Narita 
+✅ core1.moneyfly.club @ cdn.204910.best            lat=  437 jit= 990 tput=  420KB/s score= 81.36 S JP/Narita 
+✅ core1.moneyfly.club @ bbs.alipansou.com          lat=  591 jit= 286 tput=    0KB/s score=  51.5 A JP/Narita 
+✅ core1.moneyfly.club @ 104.16.3.1                 lat=  963 jit=1204 tput=  156KB/s score= 69.28 A  
+⏱️ core1.moneyfly.club @ cdn.555586.xyz             超时跳过（>45000ms）
+⏱️ core1.moneyfly.club @ cdn.667891.xyz             超时跳过（>45000ms）
+✅ core1.moneyfly.club @ cdn.7zz.cn                 lat=  449 jit=  83 tput=    0KB/s score= 58.77 A JP/Narita 
+✅ core1.moneyfly.club @ cdn.ctn32.us.kg            lat=  391 jit= 185 tput=  379KB/s score= 91.19 S JP/Narita 
+✅ core1.moneyfly.club @ cf.254301.xyz              lat= 1253 jit=1256 tput=  125KB/s score= 61.43 A SG/Singapore 
+✅ core1.moneyfly.club @ cdn.ddeed.de               lat=  479 jit= 437 tput=   58KB/s score= 58.05 A SG/Singapore 
+⏱️ core1.moneyfly.club @ cdn.cnno.de                超时跳过（>45000ms）
+✅ core1.moneyfly.club @ cdn.555586.xyz             lat=  967 jit= 203 tput=  110KB/s score=  70.1 S  
+✅ core1.moneyfly.club @ cdn.667891.xyz             lat=  462 jit= 275 tput=  372KB/s score=  87.9 S  
+✅ core1.moneyfly.club @ cdn.cnno.de                lat=  964 jit= 328 tput=  283KB/s score= 82.13 S  
+⏱️ core1.moneyfly.club @ cf.877774.xyz              超时跳过（>45000ms）
+✅ core1.moneyfly.club @ cf.nyanya.moe              lat=  417 jit=  77 tput=    0KB/s score= 59.22 A JP/Narita 
+✅ core1.moneyfly.club @ p.etime.vip                lat=  465 jit=  32 tput=  303KB/s score= 95.17 S JP/Narita 
+✅ core1.moneyfly.club @ openai.com                 lat= 1132 jit= 141 tput=   91KB/s score= 67.26 A SG/Singapore 
+✅ core1.moneyfly.club @ saas.sin.fan               lat=  371 jit=  92 tput=    0KB/s score= 59.15 A JP/Narita 
+⏱️ core1.moneyfly.club @ mail.notion.com            超时跳过（>45000ms）
+✅ core1.moneyfly.club @ cf.877774.xyz              lat=  353 jit= 276 tput=  367KB/s score= 88.78 S  
+✅ core1.moneyfly.club @ securecircle.com           lat=  883 jit= 289 tput=  224KB/s score= 83.97 S SG/Singapore 
+⏱️ core1.moneyfly.club @ saas.072159.xyz            超时跳过（>45000ms）
+✅ core1.moneyfly.club @ mail.notion.com            lat=  510 jit= 786 tput=  112KB/s score= 65.35 A  
+⏱️ core1.moneyfly.club @ spring.io                  超时跳过（>45000ms）
+⏱️ core1.moneyfly.club @ staticdelivery.nexusmods.com 超时跳过（>45000ms）
+❌ core1.moneyfly.club @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ core1.moneyfly.club @ saas.072159.xyz            lat=  423 jit=  99 tput=  262KB/s score= 93.51 S  
+✅ core1.moneyfly.club @ versantstore.pearson.com   lat=  453 jit= 132 tput=  125KB/s score= 79.14 S SG/Singapore 
+✅ core1.moneyfly.club @ www.broadcom.com           lat=  804 jit= 181 tput=  304KB/s score= 87.87 S SG/Singapore 
+⏱️ core1.moneyfly.club @ stores.staples.com         超时跳过（>45000ms）
+✅ core1.moneyfly.club @ vps.cheng2001.top          lat=  411 jit= 285 tput=    0KB/s score= 53.03 A JP/Narita 
+✅ core1.moneyfly.club @ spring.io                  lat=  650 jit= 385 tput=  127KB/s score= 70.26 S  
+✅ core1.moneyfly.club @ staticdelivery.nexusmods.com lat=  687 jit=1044 tput=  260KB/s score= 79.28 S  
+⏱️ core1.moneyfly.club @ www.bangbenjiaju.com       超时跳过（>45000ms）
+✅ core1.moneyfly.club @ www.gov.il                 lat=  710 jit= 364 tput=  278KB/s score= 83.16 S SG/Singapore 
+✅ core1.moneyfly.club @ www.giannidelprete.it      lat=  769 jit=1083 tput=  127KB/s score= 65.82 A SG/Singapore 
+✅ core1.moneyfly.club @ stores.staples.com         lat=  823 jit= 521 tput=  182KB/s score= 74.99 S  
+⏱️ core1.moneyfly.club @ www.deepl.com              超时跳过（>45000ms）
+⏱️ core1.moneyfly.club @ www.galgamex.net           超时跳过（>45000ms）
+✅ core1.moneyfly.club @ www.leics.police.uk        lat=  496 jit= 317 tput=  139KB/s score= 75.68 S SG/Singapore 
+✅ core1.moneyfly.club @ www.swowd.com              lat= 1143 jit= 659 tput=  129KB/s score= 63.05 A SG/Singapore 
+✅ core1.moneyfly.club @ www.wto.org                lat=  722 jit= 405 tput=  230KB/s score= 81.83 S SG/Singapore 
+✅ core1.moneyfly.club @ www.bangbenjiaju.com       lat=  555 jit=1598 tput=  128KB/s score= 67.78 A  
+✅ core1.moneyfly.club @ www.deepl.com              lat=  806 jit= 533 tput=  101KB/s score= 60.96 A  
+✅ core1.moneyfly.club @ www.wuduanyun.com          lat=  409 jit= 168 tput=    0KB/s score= 56.55 A JP/Narita 
+✅ core1.moneyfly.club @ www.galgamex.net           lat=  535 jit= 291 tput=  149KB/s score= 77.89 S  
+⏱️ core1.moneyfly.club @ www.mfyx.cn                超时跳过（>45000ms）
+⏱️ core1.moneyfly.club @ www.sloomb.com             超时跳过（>45000ms）
+⏱️ core1.moneyfly.club @ www.vmware.com             超时跳过（>45000ms）
+✅ core2.moneyfly.club @ 104.25.1.1                 lat=  995 jit= 201 tput=  155KB/s score=  77.8 S NL/Amsterdam 
+✅ core2.moneyfly.club @ 188.114.97.1               lat=  810 jit= 456 tput=  141KB/s score= 69.24 A NL/Amsterdam 
+✅ core2.moneyfly.club @ ahrefs.com                 lat=  596 jit= 565 tput=  339KB/s score= 80.03 S SG/Singapore 
+✅ core2.moneyfly.club @ 104.16.3.1                 lat=  994 jit= 636 tput=  120KB/s score= 62.72 A US/East Los Angeles 
+✅ core2.moneyfly.club @ auto.dolby.dpdns.org       lat=  468 jit= 103 tput=    0KB/s score= 58.01 A JP/Narita 
+⏱️ core2.moneyfly.club @ 103.21.244.1               超时跳过（>45000ms）
+✅ core1.moneyfly.club @ www.mfyx.cn                lat=  417 jit= 123 tput=  530KB/s score= 92.84 S  
+✅ core1.moneyfly.club @ www.vmware.com             lat=  531 jit= 377 tput=  173KB/s score= 79.54 S  
+✅ core1.moneyfly.club @ www.sloomb.com             lat=  502 jit= 589 tput=  214KB/s score= 80.82 S  
+✅ core2.moneyfly.club @ api.gzcrtw.com             lat=  379 jit= 991 tput=  505KB/s score= 81.84 S JP/Narita 
+✅ core2.moneyfly.club @ baota.us.kg                lat=  396 jit= 116 tput=    0KB/s score= 58.22 A JP/Narita 
+⏱️ core2.moneyfly.club @ 104.17.2.1                 超时跳过（>45000ms）
+✅ core2.moneyfly.club @ cdn.555586.xyz             lat=  488 jit=1124 tput=  143KB/s score= 70.96 S SG/Singapore 
+✅ core2.moneyfly.club @ bbs.alipansou.com          lat=  380 jit= 128 tput=  521KB/s score= 92.99 S JP/Narita 
+✅ core2.moneyfly.club @ cdn.cnno.de                lat=  990 jit= 389 tput=  185KB/s score= 77.46 S SG/Singapore 
+✅ core2.moneyfly.club @ cdn.ctn32.us.kg            lat=  426 jit=  61 tput=  391KB/s score= 94.62 S JP/Narita 
+✅ core2.moneyfly.club @ cdn.667891.xyz             lat=  450 jit=  26 tput=    1KB/s score= 60.65 A JP/Narita 
+✅ core2.moneyfly.club @ 103.21.244.1               lat= 1019 jit= 294 tput=   95KB/s score= 64.31 A  
+✅ core2.moneyfly.club @ cdn.7zz.cn                 lat=  516 jit= 336 tput=  277KB/s score= 85.62 S JP/Narita 
+⏱️ core2.moneyfly.club @ cdn.204910.best            超时跳过（>45000ms）
+✅ core2.moneyfly.club @ 104.17.2.1                 lat= 1010 jit=  84 tput=  123KB/s score= 75.59 S  
+✅ core2.moneyfly.club @ cdn.ddeed.de               lat=  854 jit= 296 tput=  152KB/s score=  75.6 S SG/Singapore 
+✅ core2.moneyfly.club @ cf.254301.xyz              lat=  647 jit= 692 tput=  156KB/s score= 71.91 S SG/Singapore 
+✅ core2.moneyfly.club @ cf.877774.xyz              lat=  553 jit= 231 tput=  344KB/s score= 88.46 S JP/Narita 
+✅ core2.moneyfly.club @ cf.nyanya.moe              lat=  434 jit=  60 tput=    0KB/s score= 59.58 A JP/Narita 
+✅ core2.moneyfly.club @ p.etime.vip                lat=  432 jit=  43 tput=    1KB/s score= 60.29 A JP/Narita 
+✅ core2.moneyfly.club @ saas.072159.xyz            lat=  375 jit= 122 tput=  282KB/s score= 93.22 S JP/Narita 
+✅ core2.moneyfly.club @ cdn.204910.best            lat=  370 jit= 104 tput=    0KB/s score=  58.8 A  
+⏱️ core2.moneyfly.club @ mail.notion.com            超时跳过（>45000ms）
+✅ core2.moneyfly.club @ securecircle.com           lat=  495 jit= 864 tput=  112KB/s score= 65.47 A SG/Singapore 
+⏱️ core2.moneyfly.club @ openai.com                 超时跳过（>45000ms）
+✅ core2.moneyfly.club @ staticdelivery.nexusmods.com lat=  524 jit=1304 tput=   95KB/s score= 62.26 A SG/Singapore 
+✅ core2.moneyfly.club @ stores.staples.com         lat=  913 jit=1072 tput=  195KB/s score= 76.52 S SG/Singapore 
+✅ core2.moneyfly.club @ spring.io                  lat=  713 jit= 642 tput=  176KB/s score= 74.86 S SG/Singapore 
+⏱️ core2.moneyfly.club @ saas.sin.fan               超时跳过（>45000ms）
+❌ core2.moneyfly.club @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ core2.moneyfly.club @ vps.cheng2001.top          lat=  369 jit= 147 tput=  449KB/s score= 92.52 S JP/Narita 
+✅ core2.moneyfly.club @ www.bangbenjiaju.com       lat=  718 jit= 506 tput=   82KB/s score= 58.37 A SG/Singapore 
+✅ core2.moneyfly.club @ www.broadcom.com           lat=  992 jit= 284 tput=  126KB/s score= 70.26 S SG/Singapore 
+✅ core2.moneyfly.club @ mail.notion.com            lat=  523 jit= 209 tput=  173KB/s score= 84.65 S  
+✅ core2.moneyfly.club @ versantstore.pearson.com   lat= 1110 jit= 105 tput=  216KB/s score=  87.6 S SG/Singapore 
+✅ core2.moneyfly.club @ openai.com                 lat=  530 jit= 499 tput=  184KB/s score= 77.81 S  
+✅ core2.moneyfly.club @ www.giannidelprete.it      lat=  746 jit= 652 tput=  111KB/s score= 63.21 A SG/Singapore 
+✅ core2.moneyfly.club @ saas.sin.fan               lat=  422 jit=  35 tput=  127KB/s score= 82.66 S  
+✅ core2.moneyfly.club @ www.gov.il                 lat= 1029 jit= 704 tput=   78KB/s score= 55.08 A SG/Singapore 
+⏱️ core2.moneyfly.club @ www.deepl.com              超时跳过（>45000ms）
+⏱️ core2.moneyfly.club @ www.galgamex.net           超时跳过（>45000ms）
+✅ core2.moneyfly.club @ www.leics.police.uk        lat=  829 jit= 495 tput=  147KB/s score= 68.97 A SG/Singapore 
+✅ core2.moneyfly.club @ www.sloomb.com             lat=  861 jit= 969 tput=  164KB/s score= 71.53 S SG/Singapore 
+✅ core2.moneyfly.club @ www.mfyx.cn                lat=  362 jit= 135 tput=  434KB/s score= 92.93 S JP/Narita 
+✅ core2.moneyfly.club @ www.swowd.com              lat=  902 jit= 325 tput=   66KB/s score= 59.28 A NL/Amsterdam 
+✅ core2.moneyfly.club @ www.deepl.com              lat=  485 jit= 981 tput=   68KB/s score= 57.86 A  
+✅ core2.moneyfly.club @ www.vmware.com             lat= 1621 jit= 200 tput=  125KB/s score= 67.37 A SG/Singapore 
+✅ core2.moneyfly.club @ www.wuduanyun.com          lat=  356 jit= 419 tput=  301KB/s score= 84.46 S JP/Narita 
+✅ core2.moneyfly.club @ www.galgamex.net           lat=  460 jit=1034 tput=   88KB/s score= 61.57 A  
+⏱️ core2.moneyfly.club @ www.wto.org                超时跳过（>45000ms）
+⏱️ core3.moneyfly.club @ 103.21.244.1               超时跳过（>45000ms）
+✅ core3.moneyfly.club @ 104.25.1.1                 lat=  965 jit= 298 tput=  169KB/s score= 77.59 S NL/Amsterdam 
+⏱️ core3.moneyfly.club @ 104.16.3.1                 超时跳过（>45000ms）
+✅ core3.moneyfly.club @ api.gzcrtw.com             lat=  444 jit= 478 tput=  147KB/s score= 72.68 S JP/Narita 
+⏱️ core3.moneyfly.club @ 104.17.2.1                 超时跳过（>45000ms）
+✅ core2.moneyfly.club @ www.wto.org                lat=  710 jit= 997 tput=  266KB/s score= 79.08 S  
+✅ core3.moneyfly.club @ baota.us.kg                lat=  421 jit= 196 tput=  429KB/s score= 90.61 S JP/Narita 
+✅ core3.moneyfly.club @ 103.21.244.1               lat=  859 jit= 232 tput=   88KB/s score= 66.28 A  
+⏱️ core3.moneyfly.club @ 188.114.97.1               超时跳过（>45000ms）
+✅ core3.moneyfly.club @ 104.16.3.1                 lat=  939 jit= 147 tput=  204KB/s score= 87.77 S  
+✅ core3.moneyfly.club @ bbs.alipansou.com          lat=  381 jit= 129 tput=  441KB/s score= 92.96 S JP/Narita 
+✅ core3.moneyfly.club @ cdn.204910.best            lat=  431 jit= 170 tput=    1KB/s score= 56.48 A JP/Narita 
+⏱️ core3.moneyfly.club @ ahrefs.com                 超时跳过（>45000ms）
+✅ core3.moneyfly.club @ 104.17.2.1                 lat=  932 jit= 810 tput=  124KB/s score= 63.93 A  
+⏱️ core3.moneyfly.club @ auto.dolby.dpdns.org       超时跳过（>45000ms）
+✅ core3.moneyfly.club @ 188.114.97.1               lat= 1185 jit= 458 tput=  151KB/s score= 67.81 A  
+✅ core3.moneyfly.club @ cdn.7zz.cn                 lat=  373 jit= 287 tput=  462KB/s score= 88.28 S JP/Narita 
+✅ core3.moneyfly.club @ cdn.cnno.de                lat= 1048 jit= 670 tput=  195KB/s score= 75.39 S DE/Dreieich 
+✅ core3.moneyfly.club @ ahrefs.com                 lat=  928 jit=  42 tput=  112KB/s score= 75.61 S  
+⏱️ core3.moneyfly.club @ cdn.555586.xyz             超时跳过（>45000ms）
+✅ core3.moneyfly.club @ cdn.ctn32.us.kg            lat=  440 jit= 185 tput=  313KB/s score= 90.78 S JP/Narita 
+✅ core3.moneyfly.club @ cdn.ddeed.de               lat=  782 jit= 455 tput=   75KB/s score= 57.96 A SG/Singapore 
+✅ core3.moneyfly.club @ auto.dolby.dpdns.org       lat=  425 jit=1393 tput=  371KB/s score= 81.46 S  
+⏱️ core3.moneyfly.club @ cdn.667891.xyz             超时跳过（>45000ms）
+✅ core3.moneyfly.club @ mail.notion.com            lat=  884 jit=1021 tput=   69KB/s score= 54.71 A SG/Singapore 
+✅ core3.moneyfly.club @ cdn.555586.xyz             lat=  625 jit= 659 tput=  201KB/s score= 79.79 S  
+✅ core3.moneyfly.club @ cf.254301.xyz              lat=  640 jit=1631 tput=   64KB/s score= 55.87 A SG/Singapore 
+✅ core3.moneyfly.club @ cf.nyanya.moe              lat=  383 jit= 210 tput=    0KB/s score= 55.51 A JP/Narita 
+✅ core3.moneyfly.club @ saas.072159.xyz            lat=  323 jit=  86 tput=  289KB/s score= 94.73 S JP/Narita 
+✅ core3.moneyfly.club @ cdn.667891.xyz             lat=  386 jit= 338 tput=    0KB/s score= 51.64 A  
+⏱️ core3.moneyfly.club @ cf.877774.xyz              超时跳过（>45000ms）
+✅ core3.moneyfly.club @ saas.sin.fan               lat=  297 jit= 226 tput=  410KB/s score= 90.75 S JP/Narita 
+✅ core3.moneyfly.club @ securecircle.com           lat=  902 jit= 864 tput=   77KB/s score= 55.96 A SG/Singapore 
+✅ core3.moneyfly.club @ staticdelivery.nexusmods.com lat=  634 jit=1008 tput=  273KB/s score= 79.72 S SG/Singapore 
+⏱️ core3.moneyfly.club @ openai.com                 超时跳过（>45000ms）
+✅ core3.moneyfly.club @ cf.877774.xyz              lat=  502 jit=  53 tput=  438KB/s score= 94.23 S  
+✅ core3.moneyfly.club @ stores.staples.com         lat= 1452 jit= 126 tput=   93KB/s score=  65.4 A SG/Singapore 
+⏱️ core3.moneyfly.club @ p.etime.vip                超时跳过（>45000ms）
+❌ core3.moneyfly.club @ www.5199dy.com             lat= null jit=   0 tput=    0KB/s score=     0 C  no101
+✅ core3.moneyfly.club @ spring.io                  lat= 1708 jit= 449 tput=   83KB/s score= 51.82 A SG/Singapore 
+✅ core3.moneyfly.club @ vps.cheng2001.top          lat=  390 jit= 369 tput=    0KB/s score= 50.68 A JP/Narita 
+✅ core3.moneyfly.club @ www.deepl.com              lat=  907 jit= 375 tput=  243KB/s score= 81.19 S SG/Singapore 
+✅ core3.moneyfly.club @ openai.com                 lat= 1219 jit=2523 tput=   89KB/s score= 55.42 A  
+✅ core3.moneyfly.club @ p.etime.vip                lat=  405 jit= 273 tput=  428KB/s score= 88.44 S  
+✅ core3.moneyfly.club @ www.bangbenjiaju.com       lat=  768 jit= 833 tput=  221KB/s score=  78.6 S SG/Singapore 
+✅ core3.moneyfly.club @ www.broadcom.com           lat=  838 jit= 704 tput=  135KB/s score= 66.64 A SG/Singapore 
+⏱️ core3.moneyfly.club @ versantstore.pearson.com   超时跳过（>45000ms）
+✅ core3.moneyfly.club @ www.giannidelprete.it      lat=  533 jit= 804 tput=  222KB/s score= 80.56 S SG/Singapore 
+✅ core3.moneyfly.club @ www.galgamex.net           lat=  656 jit= 407 tput=  127KB/s score= 69.55 A SG/Singapore 
+✅ core3.moneyfly.club @ www.gov.il                 lat=  580 jit= 763 tput=  107KB/s score= 63.89 A SG/Singapore 
+✅ core3.moneyfly.club @ www.leics.police.uk        lat=  543 jit= 890 tput=  211KB/s score= 80.47 S SG/Singapore 
+✅ core3.moneyfly.club @ www.sloomb.com             lat=  796 jit=1347 tput=  100KB/s score= 60.87 A SG/Singapore 
+✅ core3.moneyfly.club @ www.mfyx.cn                lat=  409 jit=  12 tput=    0KB/s score= 61.23 A JP/Narita 
+✅ core3.moneyfly.club @ www.wuduanyun.com          lat=  408 jit=  48 tput=  399KB/s score= 95.16 S JP/Narita 
+✅ core3.moneyfly.club @ versantstore.pearson.com   lat= 1020 jit= 517 tput=  193KB/s score= 75.28 S  
+⏱️ core3.moneyfly.club @ www.swowd.com              超时跳过（>45000ms）
+⏱️ core3.moneyfly.club @ www.vmware.com             超时跳过（>45000ms）
+⏱️ core3.moneyfly.club @ www.wto.org                超时跳过（>45000ms）
+
+本轮测 288 可用；合并保留 159 条旧数据；总计 294 条 → /Users/apple/cfmux/data/quality.json
+国家分布 {"US":17,"NL":18,"SG":110,"JP":84,"DE":1}
+✅ core3.moneyfly.club @ www.vmware.com             lat= 1030 jit= 265 tput=  272KB/s score= 83.47 S  
+✅ core3.moneyfly.club @ www.swowd.com              lat= 1084 jit= 650 tput=  142KB/s score= 65.82 A  
+✅ core3.moneyfly.club @ www.wto.org                lat=  903 jit= 662 tput=   93KB/s score= 58.75 A  
+[*] 上报到面板（合并语义，避免覆盖云端已有数据）…
+  上报结果: {"ok":true,"merged":294,"total":318,"promoted":0,"pruned":0,"unbanned":0,"alerted":false}
+[*] history 已追加: {'ts': 1793333524238, 'ok': 288, 'total': 294, 'avg': 70.3, 'best': 95.9, 'dead': 6}
+[+] 完成：2026-10-30 12:12:13

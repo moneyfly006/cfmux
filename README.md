@@ -113,85 +113,85 @@ TLS+WS 握手 → VLESS 请求 204 ×3（延迟/抖动）→ 隧道下载 256KB�
 
 ## 三、部署
 
-### 3.1 数据面（完整内核，不修改）
+### 3.1 一键安装（推荐，约 3 分钟）
 
-```bash
-# 1) 取内核
-curl -sL https://github.com/byJoey/cfnew/releases/latest/download/_worker.js -o kernel.js
-
-# 2) 建 Pages 项目（每个数据面一个）
-wrangler pages project create mux-core --production-branch main
-#    控制台 → 项目 → 设置 → 变量：u = <UUID>；KV 绑定 C = <命名空间>
-
-# 3) 部署
-mkdir -p core && cp kernel.js core/_worker.js
-wrangler pages deploy core --project-name mux-core
-
-# 4) 验证：/ 返回 hello；/<uuid>/api/config 返回 JSON
-```
-
-需要 1~3 个数据面（分摊 10 万请求/天/项目，并做故障隔离）。
-
-### 3.2 控制面
+只需一个 Cloudflare API Token（权限：`Cloudflare Pages: Edit`、`Workers KV Storage: Edit`）。
 
 ```bash
 git clone <本仓库> && cd cfmux
-
-# 1) 建项目
-wrangler pages project create cfmux --production-branch main
-
-# 2) 设变量（控制台或 API）
-#    uuid          数据面 UUID（单数据面时用）
-#    admin_password 后台密码
-#    report_token  上报口令（CI/本机写质量用，随便生成一串随机值）
-#    KV 绑定 KV = <命名空间>
-
-# 3) 部署（内置双重语法校验）
-./tools/deploy.sh
+npm i -g wrangler node          # 首次需要
+export CLOUDFLARE_API_TOKEN=xxx
+./tools/install.sh              # 数据面 1 个 + 控制面，自动建 KV、设变量、部署、初始化
 ```
 
-### 3.3 初始化数据
+脚本会完成：
+
+```
+① 校验 Token / 账号
+② 下载 cfnew 内核（官方不可达自动走镜像）
+③ 建数据面：KV + Pages 项目 + 变量 u + 部署
+④ 建控制面：KV + Pages 项目 + 变量(uuid/admin_password/report_token) + 部署
+⑤ 等就绪 → 登录 → 写入 entries → 导入 426 个优选域名
+⑥ 打印后台地址、密码、上报口令、订阅地址
+```
+
+可选参数：
 
 ```bash
-B=https://cfmux.pages.dev
-# 登录拿 Cookie
-curl -c /tmp/ck.txt -X POST "$B/admin/login" -d "password=<admin_password>" -o /dev/null
-# 写入数据面
-curl -b /tmp/ck.txt -X POST "$B/admin/save" -H "Content-Type: application/json" \
-  -d '{"entries":"[{\"name\":\"core1\",\"host\":\"mux-core.pages.dev\",\"uuid\":\"<UUID>\",\"path\":\"/\"}]"}'
-# 导入优选域名
-curl -b /tmp/ck.txt -X POST "$B/api/import" -H "Content-Type: application/json" \
-  -d '{"url":"https://bestcf.fxxk.dedyn.io/cf_domains.txt"}'
+DATA_PLANES=3 ./tools/install.sh        # 要 3 个数据面（推荐，分摊配额）
+ADMIN_PASSWORD=你的密码 ./tools/install.sh
+PROJECT_PREFIX=myproxy ./tools/install.sh   # 项目名前缀
 ```
 
-### 3.4 测速（二选一）
+> 实测：从零到能用约 3 分钟；装完订阅是空的（还没测速），跑一次测速即可。
 
-**A. 本机（推荐，最准）**
+### 3.2 测速（装完必须做一次）
+
 ```bash
-cp .refresh.env.example .refresh.env   # 填 KV_ID / ENTRIES_FILE / PREF_FILE
-echo "<report_token>" > .report_token
-./tools/refresh.sh                     # 测完自动上报
-# 定时（macOS launchd，每 2 小时）
+cp .refresh.env.example .refresh.env    # 填 ENTRIES_FILE / PREF_FILE
+echo "<上报口令>" > .report_token
+./tools/refresh.sh                      # 测完自动上报，订阅立刻有节点
 ```
 
-**B. GitHub Actions（云端保活）**
-```
-仓库 Settings → Secrets: CFMUX_REPORT_TOKEN = <report_token>
-            → Variables: CFMUX_BASE = https://cfmux.pages.dev
-工作流 .github/workflows/refresh-quality.yml 已配置每 3 小时运行
-```
-只用一个自定义上报口令，**不需要把 Cloudflare Token 放进 GitHub**。
+或者用云端（不需要你电脑）：
 
-### 3.5 可选：自定义域名
+```
+仓库 Settings → Secrets  CFMUX_REPORT_TOKEN = <上报口令>
+            → Variables CFMUX_BASE = https://<你的项目>.pages.dev
+.github/workflows/refresh-quality.yml 已配置每 3 小时自动跑
+```
+
+### 3.3 手动部署（想自己控制每一步）
+
+**数据面**
+
+```bash
+curl -sL https://github.com/byJoey/cfnew/releases/latest/download/_worker.js -o kernel.js
+wrangler pages project create <name> --production-branch main
+# 控制台设变量 u=<UUID>，KV 绑定 C=<命名空间>
+mkdir -p core && cp kernel.js core/_worker.js
+wrangler pages deploy core --project-name <name>
+```
+
+**控制面**
+
+```bash
+wrangler pages project create <control> --production-branch main
+# 变量：uuid / admin_password / report_token；KV 绑定 KV=<命名空间>
+./tools/deploy.sh    # 内置 Worker + 渲染后浏览器 JS 双校验
+```
+
+**初始化**：登录后台 → 「数据面」填 host/uuid → 「优选」从网址导入
+`https://bestcf.fxxk.dedyn.io/cf_domains.txt`。
+
+### 3.4 可选：自定义域名
 
 | 记录 | 值 |
 | --- | --- |
-| CNAME `mux` → `cfmux.pages.dev` | 控制面域名（可达 `mux.<你的域名>/admin`） |
-| CNAME `core1/2/3` → `mux-core*.pages.dev` | 数据面域名（防 `pages.dev` 被污染） |
+| CNAME `mux` → `<control>.pages.dev` | 控制面域名（`mux.<你的域名>/admin`） |
+| CNAME `core1/2/3` → `<plane>.pages.dev` | 数据面域名（防 `pages.dev` 被污染） |
 
-加完后在 Pages 项目 → 自定义域 添加，然后后台「数据面」把 host 换成新域名。
-
----
+加完后 Pages 项目 → 自定义域 添加，后台「数据面」把 host 换成新域名。
 
 ## 四、订阅
 
@@ -293,6 +293,7 @@ https://<域名>/sub?target=loon         # Loon
 src/index.js             控制面（路由/订阅/后台/API/内核代理/通知）
 tools/quality.mjs        测速引擎（延迟/抖动/吞吐/国家/评分/看门狗）
 tools/refresh.sh         本机定时刷新（测速 + 上报 + 历史曲线）
+tools/install.sh         一键安装（建 KV/项目/变量/部署/初始化）
 tools/deploy.sh          安全部署（Worker 语法 + 渲染后浏览器 JS 双校验）
 tools/check-dash.js      渲染 /admin 并校验内联脚本
 tools/measure.mjs        简易测速（早期版本，保留）
