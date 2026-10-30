@@ -113,39 +113,45 @@ TLS+WS 握手 → VLESS 请求 204 ×3（延迟/抖动）→ 隧道下载 256KB�
 
 ## 三、部署
 
-### 3.1 一键安装（推荐，约 3 分钟）
+### 3.1 上传部署（最简单，浏览器操作，无需命令行）
 
-只需一个 Cloudflare API Token（权限：`Cloudflare Pages: Edit`、`Workers KV Storage: Edit`）。
+下载两个发布包：**Releases** 页面 → `cfmux-dataplane.zip` / `cfmux-control.zip`
+
+**第 1 步：部署数据面**
+
+1. Cloudflare 控制台 → Workers 和 Pages → 创建 → Pages → **上传资产**
+2. 上传 `cfmux-dataplane.zip`（`_worker.js` 必须在根目录）
+3. 项目 → 设置 → 变量和机密：添加 `u` = 你的 UUID（`uuidgen` 生成）
+4. 项目 → 设置 → 函数 → KV 命名空间绑定：变量名 `C` → 新建命名空间
+5. 重新部署 → 访问 `https://<项目>.pages.dev/` 应返回 `hello`
+
+**第 2 步：部署控制面**
+
+1. 同样「上传资产」，上传 `cfmux-control.zip`
+2. 变量：`uuid` = 上一步的 UUID、`admin_password` = 后台密码、`report_token` = 随机串
+3. KV 绑定：变量名 `KV` → 新建命名空间
+4. 重新部署 → 打开 `https://<控制面>.pages.dev/admin` 登录
+
+**第 3 步：初始化**
+
+后台 → 数据面 → 填 host（`<数据面>.pages.dev`）与 uuid → 保存
+后台 → 优选 → 从网址导入 `https://bestcf.fxxk.dedyn.io/cf_domains.txt`
+
+> 实测：两个包上传后均可正常启动；未配置变量时会给出明确提示而不是报错崩溃。
+
+### 3.2 一键脚本（有命令行时）
 
 ```bash
 git clone <本仓库> && cd cfmux
-npm i -g wrangler node          # 首次需要
-export CLOUDFLARE_API_TOKEN=xxx
-./tools/install.sh              # 数据面 1 个 + 控制面，自动建 KV、设变量、部署、初始化
+npm i -g wrangler
+export CLOUDFLARE_API_TOKEN=xxx      # Pages:Edit + KV:Edit
+./tools/install.sh                   # 自动建 KV/项目/变量/部署/初始化
+# 可选：DATA_PLANES=3 ADMIN_PASSWORD=xxx PROJECT_PREFIX=myproxy
 ```
 
-脚本会完成：
+脚本会打印后台地址、密码、上报口令、订阅地址。
 
-```
-① 校验 Token / 账号
-② 下载 cfnew 内核（官方不可达自动走镜像）
-③ 建数据面：KV + Pages 项目 + 变量 u + 部署
-④ 建控制面：KV + Pages 项目 + 变量(uuid/admin_password/report_token) + 部署
-⑤ 等就绪 → 登录 → 写入 entries → 导入 426 个优选域名
-⑥ 打印后台地址、密码、上报口令、订阅地址
-```
-
-可选参数：
-
-```bash
-DATA_PLANES=3 ./tools/install.sh        # 要 3 个数据面（推荐，分摊配额）
-ADMIN_PASSWORD=你的密码 ./tools/install.sh
-PROJECT_PREFIX=myproxy ./tools/install.sh   # 项目名前缀
-```
-
-> 实测：从零到能用约 3 分钟；装完订阅是空的（还没测速），跑一次测速即可。
-
-### 3.2 测速（装完必须做一次）
+### 3.3 测速（装完必须做一次）
 
 ```bash
 cp .refresh.env.example .refresh.env    # 填 ENTRIES_FILE / PREF_FILE
@@ -161,7 +167,7 @@ echo "<上报口令>" > .report_token
 .github/workflows/refresh-quality.yml 已配置每 3 小时自动跑
 ```
 
-### 3.3 手动部署（想自己控制每一步）
+### 3.4 手动部署（逐步控制）
 
 **数据面**
 
@@ -184,7 +190,7 @@ wrangler pages project create <control> --production-branch main
 **初始化**：登录后台 → 「数据面」填 host/uuid → 「优选」从网址导入
 `https://bestcf.fxxk.dedyn.io/cf_domains.txt`。
 
-### 3.4 可选：自定义域名
+### 3.5 可选：自定义域名
 
 | 记录 | 值 |
 | --- | --- |
